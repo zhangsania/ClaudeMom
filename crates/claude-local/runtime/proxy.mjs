@@ -1767,7 +1767,7 @@ function forwardGateway(req, res, requestPath, raw) {
     ...req.headers, host: target.host, "content-length": body.length,
     "x-api-key": runtime.key, authorization: `Bearer ${runtime.key}`,
   };
-  for (const key of ["proxy-connection", "accept-encoding", "connection", "cookie", "transfer-encoding"]) delete headers[key];
+  for (const key of ["proxy-connection", "connection", "cookie", "transfer-encoding"]) delete headers[key];
   const up = (target.protocol === "https:" ? https : http).request({
     hostname: target.hostname, port: target.port || (target.protocol === "https:" ? 443 : 80),
     path: target.pathname + target.search, method: req.method, headers, timeout: 300000,
