@@ -100,7 +100,7 @@ export function runtimeConfig(env = process.env) {
   })();
   return {
     managed, gateway, model, smallModel, key,
-    preserveMessageBody: env.CLAUDE_LOCAL_PRESERVE_MESSAGE_BODY === "1",
+    preserveMessageBody: flag("PRESERVE_MESSAGE_BODY"),
     models: [...new Set([model, smallModel, ...models])],
     modelWindows,
     modelNames,

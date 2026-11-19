@@ -934,8 +934,8 @@ test("gateway forwarding preserves the configured root, authentication and selec
     assert.equal(call.headers.authorization, "Bearer test-local-gateway-token");
     assert.equal(call.headers["x-api-key"], "test-local-gateway-token");
     assert.equal(call.body.model, modelIds[2]);
-    assert.equal(call.body.diagnostics, undefined);
-    assert.deepEqual(call.body.metadata, { user_id: "preserved" });
+    assert.deepEqual(call.body.diagnostics, {});
+    assert.deepEqual(call.body.metadata, { diagnostics: {}, user_id: "preserved" });
   }
   const result = await request(service, "/v1/models");
   assert.deepEqual(result.json.data.map((entry) => entry.id), modelIds);

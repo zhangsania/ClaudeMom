@@ -843,15 +843,16 @@ test("CDN dynamic APIs ignore old cache entries and do not persist responses", a
   assert.equal(fs.existsSync(path.join(dictationCacheDir, `${uncachedKey}.json`)), false);
 });
 
-test("model requests strip diagnostics and preserve the rest of the payload", async () => {
+test("model requests keep diagnostics by default", async () => {
   const payload = {
     model: "local-model",
     messages: [{ role: "user", content: "hello" }],
-    metadata: { user_id: "local-test" },
+    diagnostics: { source: "desktop" },
+    metadata: { user_id: "local-test", diagnostics: {} },
     max_tokens: 16,
   };
   const result = await request("/v1/messages?beta=true", {
-    body: { ...payload, diagnostics: { source: "desktop" }, metadata: { ...payload.metadata, diagnostics: {} } },
+    body: payload,
   });
   assert.equal(result.status, 200);
   assert.deepEqual(gatewayRequests.at(-1), { path: "/v1/messages?beta=true", body: payload });

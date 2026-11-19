@@ -397,8 +397,8 @@ const CONFIG_LIBRARY_BACKUP: &str = "configLibrary.codex-plus-backup";
 const GATEWAY_CONFIG_ID: &str = "00000000-0000-4000-8000-636c6175646d";
 const GATEWAY_CONFIG_MARKER: &str = "claudeMomGateway";
 
-/// Claude 第三方模式的推理配置：推理走本地服务（它按上游 Key 校验，带上两种认证头、
-/// 换算模型名、去掉 diagnostics 再转给上游），模型列表照上游的来，带显示名。
+/// Claude 第三方模式的推理配置：本地服务校验 Key，转发请求体并设置网关鉴权；
+/// 模型列表沿用网关配置和显示名。
 fn gateway_config_entry(port: u16, upstream: &Upstream) -> Value {
     let mut names: Vec<&str> = Vec::new();
     for model in std::iter::once(&upstream.default_model).chain(upstream.models.iter()) {

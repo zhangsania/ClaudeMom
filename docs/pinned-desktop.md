@@ -14,10 +14,11 @@ version, and does not install or run Claude Desktop. To add another version,
 verify its official package URL, size and SHA-256, then add an entry to
 `scripts/desktop-releases.json`.
 
-Set `CLAUDE_LOCAL_PRESERVE_MESSAGE_BODY=1` in the environment launching ClaudeMom
-to keep incoming `POST /v1/messages` bodies byte for byte on forwarding to the
-configured gateway. The gateway must accept the model ID supplied by the client.
-ClaudeMom uses its existing gateway authentication and transport.
+ClaudeMom keeps incoming `POST /v1/messages` bodies byte for byte by default.
+The gateway must accept the model ID supplied by the client. Set
+`CLAUDE_LOCAL_PRESERVE_MESSAGE_BODY=0` in ClaudeMom's launch environment to
+restore the legacy model mapping and request sanitization. ClaudeMom uses its
+existing gateway authentication and transport in either case.
 `POST /v1/messages/count_tokens` always forwards its raw body to the configured
 gateway. The gateway must support that endpoint; Mom returns its response
 without a local estimate, including when the gateway returns an error.
@@ -30,6 +31,8 @@ deliver the equivalent Boolean in the macOS managed preferences domain
 `com.anthropic.claudefordesktop`. Merge into existing policy; do not replace
 unrelated managed preferences. The application does not apply system policy
 or manage updates delivered by operating-system package stores.
+This policy applies only to Claude Desktop; ClaudeMom continues to use this
+fork's updater feed.
 
 For the Sub2API create-key dialog, stage the finished ClaudeMom installers at
 versioned URLs on the gateway's web origin. For example:
