@@ -1,10 +1,7 @@
-# 每次推送 main：macOS / Windows 上跑测试并完整编一遍（不打包、不发布），发版前先把平台问题暴露出来。
+# 手动运行 macOS / Windows 的平台构建检查；推送源代码不会自动执行。
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 jobs:

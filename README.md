@@ -1,5 +1,7 @@
 # ClaudeMom
 
+本分支由 [zhangsania](https://github.com/zhangsania) 维护和发布，源自 [BigPizzaV3/ClaudeMom](https://github.com/BigPizzaV3/ClaudeMom)，按 [AGPL-3.0-only](LICENSE) 分发。[固定 Desktop 版本、禁更及下载说明](docs/pinned-desktop.md)。
+
 **不用 Claude 账号！把 API Key 变成登录模式，Claude 桌面版全功能解锁（汉化 / 语音 / 电脑控制）**
 
 <img src="docs/images/cover.jpg" alt="ClaudeMom" width="640">
@@ -11,9 +13,9 @@ Claude 桌面版一直有两种用法：
 
 ClaudeMom 是一种**新的接入方式**：在本机把你的 API Key **变成「登录模式」**。Claude 桌面版看到的是一个已登录的账号，界面和功能都是登录版的；实际的模型请求走你自己的 Base URL + Key。
 
-不需要 Claude 账号，不改原版应用，不动官方登录态，官方 App 照常更新。
+Claude Desktop 由 Anthropic 单独分发；使用固定版本时，参照上面的安装和禁更说明。
 
-下载：[Releases](https://github.com/BigPizzaV3/ClaudeMom/releases/latest)（macOS 通用版 dmg / Windows exe）
+下载：[本分支的 Releases](https://github.com/zhangsania/ClaudeMom/releases)（签名安装包发布后提供）
 
 友情链接：<a href="https://linux.do">LINUX DO</a>
 

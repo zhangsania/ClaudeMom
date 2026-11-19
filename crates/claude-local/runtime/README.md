@@ -344,7 +344,7 @@ Local/Session Storage leveldb 日志。
   `policy_limits` → `{restrictions:{},compliance_taints:[],defaults:{},artifact_create_notice:null}`
   （app.asar 的 policy-limits 校验器要求 `restrictions` 是非 null 对象，不能是数组）。
   claude.ai 与 8899 直连两条路径都需 mock。
-- `count_tokens` 本地估算；`/v1/models` mock；`/v1/messages` 转本地 gateway。
+- 本分支的 `count_tokens` 由配置好的网关计数；`/v1/models` 仍为本地应答。
 
 ## 2026-11-08：Code 托管设置警告的根因与验证
 

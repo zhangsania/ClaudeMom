@@ -430,6 +430,7 @@ fn gateway_config_entry(port: u16, upstream: &Upstream) -> Value {
         "inferenceModels": models,
         "modelDiscoveryEnabled": false,
         "disableDeploymentModeChooser": true,
+        "disableAutoUpdates": true,
     })
 }
 

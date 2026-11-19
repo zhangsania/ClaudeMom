@@ -2257,11 +2257,8 @@ function handle(req, res, hostHeader) {
       if (/^\/api\/claude_code\/policy_limits/.test(url.pathname)) {
         return json(res, POLICY_LIMITS);
       }
-      // token 计数：网关不一定实现，本地估算
       if (req.method === "POST" && url.pathname === "/v1/messages/count_tokens") {
-        return readBody(req, (raw) =>
-          json(res, { input_tokens: Math.max(1, Math.ceil(raw.length / 4)), context_management: null }),
-        );
+        return readBody(req, (raw) => forwardGateway(req, res, url.pathname + url.search, raw));
       }
       if (req.method === "GET" && /^\/v1\/models/.test(url.pathname)) {
         return json(res, modelList(runtime));
@@ -2673,9 +2670,6 @@ const outer = http.createServer((req, res) => {
     const body = JSON.stringify({ uuid: ORG.uuid, settings: {}, content: { entries: {} }, checksum: "local-1" });
     res.writeHead(200, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(body), etag: '"local-1"', "cache-control": "no-store" });
     return res.end(body);
-  }
-  if (req.method === "POST" && u.pathname === "/v1/messages/count_tokens") {
-    return readBody(req, (raw) => json(res, { input_tokens: Math.max(1, Math.ceil(raw.length / 4)), context_management: null }));
   }
   // 其余 HTTP 请求（GET/POST 等）原样转发 magpie
   return readBody(req, fwd);

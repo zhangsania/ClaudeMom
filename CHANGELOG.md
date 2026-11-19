@@ -2,6 +2,10 @@
 
 ## 未发布
 
+- 更换本分支的 Bundle ID、更新地址和更新验签公钥。
+- 可选原样转发推理请求体；提供固定版本 Desktop 下载工具及禁更配置。
+- 将两条入口的 token 计数交给配置的网关，移除本地估算。
+
 - 修复 Cowork 提交任务时报「Cowork 目前不可用」：补上 `/api/bootstrap/<org>/system_prompts`，并把 `system_prompts` 写进 bootstrap。提示词在运行时从本机 `app.asar` 读取（不在仓库里分发官方文本），读不到时用内置兜底文案。
 
 ## 0.1.9 - 2026-11-18

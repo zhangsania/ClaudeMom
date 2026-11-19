@@ -334,6 +334,10 @@ before(async () => {
       body: JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"),
     });
     res.writeHead(200, { "content-type": "application/json" });
+    if (req.url === "/v1/messages/count_tokens") {
+      res.end(JSON.stringify({ input_tokens: 123, context_management: null }));
+      return;
+    }
     res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "ok" }] }));
   });
   const gatewayPort = await listen(gateway);
@@ -717,15 +721,16 @@ test("dynamic catalogs contain dynamic translations rather than Desktop shell me
   assert.equal(result.body["+/cwsayrqk"], undefined);
 });
 
-test("token counting stays local instead of reaching the model gateway", async () => {
+test("token counting uses the configured gateway's result", async () => {
   const before = gatewayRequests.length;
+  const body = { model: "local-model", messages: [{ role: "user", content: "hello" }] };
   const result = await request("/v1/messages/count_tokens", {
-    body: { model: "local-model", messages: [{ role: "user", content: "hello" }] },
+    body,
   });
   assert.equal(result.status, 200);
-  assert.ok(Number.isInteger(result.body.input_tokens));
-  assert.ok(result.body.input_tokens > 0);
-  assert.equal(gatewayRequests.length, before);
+  assert.deepEqual(result.body, { input_tokens: 123, context_management: null });
+  assert.equal(gatewayRequests.length, before + 1);
+  assert.deepEqual(gatewayRequests.at(-1), { path: "/v1/messages/count_tokens", body });
 });
 
 test("upstream requests keep their original host instead of being rewritten to claude.ai", async () => {

@@ -100,6 +100,7 @@ export function runtimeConfig(env = process.env) {
   })();
   return {
     managed, gateway, model, smallModel, key,
+    preserveMessageBody: env.CLAUDE_LOCAL_PRESERVE_MESSAGE_BODY === "1",
     models: [...new Set([model, smallModel, ...models])],
     modelWindows,
     modelNames,
@@ -312,6 +313,7 @@ export function isPrivateFile(metadata, { platform = process.platform, uid = pro
 }
 
 export function gatewayBody(config, raw) {
+  if (config.preserveMessageBody) return raw;
   const value = JSON.parse(raw.toString("utf8"));
   if (!isRecord(value)) throw new Error("Invalid model request");
   delete value.diagnostics;
