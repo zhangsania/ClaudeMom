@@ -12,8 +12,6 @@ pub struct ClaudeLocalSettings {
     /// 无视 Claude 对后台模式的 macOS 版本上限（新系统上 Claude 会提示「暂不支持」，默认关）。
     /// 打开时一并打开后台模式；Claude 没在这个系统上验证过，可能不稳定。
     pub force_background_mode: bool,
-    pub disable_nonessential_traffic: bool,
-    pub disable_web_fetch: bool,
     /// 打开 Cowork 的总开关（GrowthBook `yukon_silver`，默认开）。录制模板里它是关的，
     /// 新版 Claude 会因此只显示 Chat / Code。平台限制（MSIX、HCS 等）仍由 Claude 自己检查。
     pub cowork: bool,
@@ -61,8 +59,6 @@ impl Default for ClaudeLocalSettings {
             computer_use: false,
             background_mode: false,
             force_background_mode: false,
-            disable_nonessential_traffic: true,
-            disable_web_fetch: true,
             cowork: true,
             hub_home: false,
             template: String::new(),

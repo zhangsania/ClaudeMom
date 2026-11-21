@@ -2210,25 +2210,15 @@ fn strip_inherited_proxy(command: &mut Command) {
     }
 }
 
-fn apply_code_traffic_settings(command: &mut Command, config: &ClaudeLocalSettings) {
-    for (name, disabled) in [
-        ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", config.disable_nonessential_traffic),
-        ("CLAUDE_CODE_DISABLE_WEB_FETCH", config.disable_web_fetch),
-    ] {
-        if disabled {
-            command.env(name, "1");
-        } else {
-            command.env_remove(name);
-        }
-    }
-}
-
 fn launch_original(
     source: &Path,
     root: &Path,
     port: Option<u16>,
+    localization: bool,
     upstream: Option<&Upstream>,
-    config: &ClaudeLocalSettings,
+    share_home: bool,
+    three_p: bool,
+    cowork: bool,
 ) -> Result<()> {
     let mut command = hidden_command(executable(source));
     for name in [
@@ -2242,18 +2232,20 @@ fn launch_original(
     if let (Some(port), Some(upstream)) = (port, upstream) {
         // 内置 Claude Code 也走本地服务，令牌就是上游的 Key（本地服务按它校验）。
         strip_inherited_proxy(&mut command);
-        apply_code_traffic_settings(&mut command, config);
+        command
+            .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+            .env("CLAUDE_CODE_DISABLE_WEB_FETCH", "1");
         if let Some(window) = upstream.default_window {
             command.env("CLAUDE_CODE_MAX_CONTEXT_TOKENS", window.to_string());
         }
-        if config.three_p_mode {
+        if three_p {
             // 第三方模式：Claude 用安装包自带的界面，对话 / Cowork / Code 都由它自己直接调推理网关
             // （就是本地服务），不经代理、也不需要模拟账号。只换 deploymentMode 和 configLibrary。
             let sets = profile_sets();
             apply_real_profile(&sets, root, "3p")?;
             write_gateway_library(&sets, &gateway_config_entry(port, upstream))?;
             command.arg(gateway_flag(port));
-            if config.localization {
+            if localization {
                 command.arg("--lang=zh-CN");
             }
             for (name, value) in &upstream.extra_env {
@@ -2266,12 +2258,14 @@ fn launch_original(
         let sets = profile_sets();
         apply_real_profile_one_p(&sets, root)?;
         #[cfg(windows)]
-        if config.cowork {
+        if cowork {
             apply_egress_proxy_config(&sets, port)?;
         }
-        apply_code_dir(&mut command, root, code_share_home(config), &home_dir().join(".claude"))?;
+        #[cfg(not(windows))]
+        let _ = cowork;
+        apply_code_dir(&mut command, root, share_home, &home_dir().join(".claude"))?;
         command
-            .args(local_launch_args(root, port, config.localization))
+            .args(local_launch_args(root, port, localization))
             .env("ANTHROPIC_BASE_URL", format!("http://127.0.0.1:{port}"))
             .env("ANTHROPIC_API_KEY", &upstream.token)
             .env("ANTHROPIC_AUTH_TOKEN", &upstream.token)
@@ -2625,8 +2619,11 @@ pub fn perform(action: &str) -> Result<ClaudeLocalResult> {
                     &source,
                     &root,
                     Some(port),
+                    config.localization,
                     Some(&upstream),
-                    &config,
+                    code_share_home(&config),
+                    config.three_p_mode,
+                    config.cowork,
                 ) {
                     stop_backend();
                     let _ = restore_real_profile(&profile_sets(), &root);
