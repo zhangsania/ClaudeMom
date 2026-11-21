@@ -2,9 +2,9 @@ name: Release
 
 # 发版入口是推送 v* tag（本地用 `node scripts/release.mjs <版本号>`）：
 #   prepare  校验版本号文件与 tag 一致，从 CHANGELOG.md 截取说明，建草稿 Release
-#   构建     Windows / macOS 并行构建，附件传到草稿
+#   构建     默认只构建 Windows；CLAUDEMOM_RELEASE_MACOS=true 时同时构建 macOS
 #   收尾     生成 SHA256SUMS.txt 与自动更新用的 latest.json，附件齐了才公开发布
-# 草稿期间用户看不到这一版，某个平台失败也不会让「检查更新」读到缺附件的 Latest。
+# 草稿期间用户看不到这一版，所选平台全部成功后才公开。
 # 补跑某个平台用 workflow_dispatch。
 #
 # 签名：更新包用 TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)；macOS 正式签名 + 公证用下面这些 Secret
@@ -154,7 +154,7 @@ jobs:
   macos:
     name: macOS (universal)
     needs: prepare
-    if: github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'macos'
+    if: (github.event_name == 'push' && vars.CLAUDEMOM_RELEASE_MACOS == 'true') || inputs.platform == 'all' || inputs.platform == 'macos'
     runs-on: macos-latest
     steps:
       - name: Checkout release tag
@@ -261,7 +261,12 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
+      REQUIRE_MACOS: ${{ needs.macos.result == 'success' }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
       - name: Download release assets
         shell: bash
         run: |
@@ -270,63 +275,21 @@ jobs:
           gh release download "$RELEASE_TAG" --repo "$REPO" --pattern 'ClaudeMom*' --dir assets --clobber
           ls -l assets
 
-      - name: Upload SHA256SUMS.txt
-        shell: bash
-        run: |
-          set -euo pipefail
-          (cd assets && sha256sum ClaudeMom* | sort -k2 > ../SHA256SUMS.txt)
-          cat SHA256SUMS.txt
-          gh release upload "$RELEASE_TAG" SHA256SUMS.txt --clobber --repo "$REPO"
-
-      - name: Generate latest.json
+      - name: Verify assets and generate release metadata
         shell: bash
         run: |
           set -euo pipefail
           gh release view "$RELEASE_TAG" --repo "$REPO" --json body,tagName > release.json
-          node <<'NODE'
-          const fs = require("fs");
-          const path = require("path");
-          const release = JSON.parse(fs.readFileSync("release.json", "utf8"));
-          const repo = process.env.REPO;
-          const tag = release.tagName || process.env.RELEASE_TAG;
-          const version = tag.replace(/^v/i, "");
-          const windows = `ClaudeMom_${version}_x64-setup.exe`;
-          const mac = "ClaudeMom_universal.app.tar.gz";
-          const required = [windows, `${windows}.sig`, `ClaudeMom_${version}_universal.dmg`, mac, `${mac}.sig`];
-          for (const name of required) {
-            const file = path.join("assets", name);
-            if (!fs.existsSync(file) || fs.statSync(file).size === 0) throw new Error("发布附件缺失或为空：" + name);
-          }
-          const signature = (name) => fs.readFileSync(path.join("assets", `${name}.sig`), "utf8").trim();
-          // 草稿的地址是临时 untagged 链接，静态元数据必须用正式 tag 的下载地址。
-          const url = (name) => `https://github.com/${repo}/releases/download/${tag}/${encodeURIComponent(name)}`;
-          const win = { signature: signature(windows), url: url(windows) };
-          const darwin = { signature: signature(mac), url: url(mac) };
-          // Tauri updater 格式；平台键与 tauri-action 之前生成的保持一致。
-          const payload = {
-            version,
-            notes: release.body || "",
-            pub_date: new Date().toISOString(),
-            platforms: {
-              "windows-x86_64": win,
-              "windows-x86_64-nsis": win,
-              "darwin-aarch64": darwin,
-              "darwin-x86_64": darwin,
-              "darwin-aarch64-app": darwin,
-              "darwin-x86_64-app": darwin,
-            },
-          };
-          fs.writeFileSync("latest.json", `${JSON.stringify(payload, null, 2)}\n`);
-          NODE
-          cat latest.json
+          node scripts/release-assets.mjs
+          (cd assets && sha256sum ClaudeMom* | sort -k2 > ../SHA256SUMS.txt)
 
-      - name: Upload latest.json
+      - name: Upload release metadata
         shell: bash
-        run: gh release upload "$RELEASE_TAG" latest.json --clobber --repo "$REPO"
+        run: gh release upload "$RELEASE_TAG" SHA256SUMS.txt latest.json --clobber --repo "$REPO"
 
       - name: Publish Release
-        # 推 tag 的发版自动发布；补跑只在勾了 publish 时发布。两个平台都得在这一轮成功。
-        if: needs.prepare.outputs.is_draft == 'true' && (github.event_name == 'push' || inputs.publish) && needs.windows.result == 'success' && needs.macos.result == 'success'
+        # 公开草稿必须有本轮成功构建的 Windows 包；启用 macOS 时也必须成功。
+        if: needs.prepare.outputs.is_draft == 'true' && (github.event_name == 'push' || inputs.publish) && needs.windows.result == 'success' && (needs.macos.result == 'success' || needs.macos.result == 'skipped')
         shell: bash
         run: |
           set -euo pipefail
