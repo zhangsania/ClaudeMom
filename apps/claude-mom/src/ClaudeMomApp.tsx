@@ -691,6 +691,8 @@ function ClaudeSettings({ status, busy, onConfigure, onAction, onVoice, update, 
 
       <details className="cm-more">
         <summary>高级</summary>
+        <Toggle checked={config.disableNonessentialTraffic ?? true} disabled={disabled} label="关闭 Code 非必要流量" onChange={(next) => onConfigure({ disableNonessentialTraffic: next })} />
+        <Toggle checked={config.disableWebFetch ?? true} disabled={disabled} label="禁用 Code WebFetch" onChange={(next) => onConfigure({ disableWebFetch: next })} />
         <Toggle checked={config.cowork ?? true} detail="关掉后按 Claude 自己的开关，新版 Claude 通常只剩 Chat / Code。系统条件（Windows 需商店版、虚拟化可用）仍由 Claude 检查" disabled={disabled} label="Cowork" onChange={(next) => onConfigure({ cowork: next })} />
         {(config.cowork ?? true) && status.caMachineSupported && !status.caMachineTrusted ? (
           <div className="cm-row-actions" title="Cowork 虚拟机服务以 LocalSystem 运行，只读取本机根证书。">

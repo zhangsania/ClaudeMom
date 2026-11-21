@@ -42,6 +42,8 @@ export type ClaudeConfig = {
   backgroundMode: boolean;
   /** 无视 Claude 对后台模式的 macOS 版本上限。 */
   forceBackgroundMode?: boolean;
+  disableNonessentialTraffic?: boolean;
+  disableWebFetch?: boolean;
   /** 打开 Cowork 的总开关（默认开）。 */
   cowork?: boolean;
   /** 用 Claude 的合并式主页：对话和 Cowork 合在一起，没有「对话 | Cowork」切换（默认关）。 */
