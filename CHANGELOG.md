@@ -1,5 +1,9 @@
 # 更新日志
 
+## 0.1.12 - 2026-11-22
+
+- 发往配置网关的请求统一使用 `Authorization: Bearer`。修复试点网关因同时收到两种认证头而将 Desktop Code 请求分到旧网关的问题。
+
 ## 0.1.11 - 2026-11-21
 
 - 通过 ClaudeMom 启动 Desktop 时，内置 Code 默认关闭非必要流量并禁用 WebFetch。
