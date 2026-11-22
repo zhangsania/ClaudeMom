@@ -1,5 +1,11 @@
 # 更新日志
 
+## 0.1.13 - 2026-11-22
+
+- Windows 上，从 ClaudeMom 启动 Claude Desktop 时自动关闭 Desktop 自带更新，无需管理员授权。已有机器策略时以机器策略为准；ClaudeMom 自己的更新保持开启。
+- 完整功能模式下，本地代理拒绝第三方 HTTPS，包括 Sentry、Datadog 和 Statsig；未在本地处理的官方 API 不再回源。
+- Code 的本地代理入口只向配置的网关转发推理和 token 计数请求；保留本地应答及白名单内的官方界面资源和组件下载。
+
 ## 0.1.12 - 2026-11-22
 
 - 发往配置网关的请求统一使用 `Authorization: Bearer`。修复试点网关因同时收到两种认证头而将 Desktop Code 请求分到旧网关的问题。
