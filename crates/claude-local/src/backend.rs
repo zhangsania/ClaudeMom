@@ -1928,6 +1928,7 @@ fn start_backend(
         .arg(root.join("ca"))
         .current_dir(root)
         .env("CLAUDE_LOCAL_MANAGED", "1")
+        .env("CLAUDE_LOCAL_RESTRICT_EGRESS", if host().restrict_desktop_egress() { "1" } else { "0" })
         // 代理脚本按这个目录找听写凭据（变量名沿用 Codex++ 的，脚本两边共用）。
         .env("CODEX_PLUS_STATE_DIR", host().state_dir())
         .env("CLAUDE_LOCAL_CACHE_DIR", root.join(".cache"))
@@ -2613,6 +2614,7 @@ pub fn perform(action: &str) -> Result<ClaudeLocalResult> {
                     prepare_dictation(&root, &node)?;
                 }
                 let upstream = host().prepare_upstream(&config)?;
+                host().prepare_desktop_launch()?;
                 sync_model_compact_windows(&root, &config, &upstream);
                 let port = start_backend(&root, &node, &config, &upstream, None)?;
                 if let Err(error) = launch_original(

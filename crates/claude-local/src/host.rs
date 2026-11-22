@@ -58,6 +58,15 @@ pub trait Host: Send + Sync {
     /// 启动前准备并返回真正要用的上游（Codex++ 在这里起网关、写绑定）。
     fn prepare_upstream(&self, config: &ClaudeLocalSettings) -> Result<Upstream>;
 
+    /// Applies host-specific Desktop settings after launch preflight.
+    fn prepare_desktop_launch(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn restrict_desktop_egress(&self) -> bool {
+        false
+    }
+
     /// 参与配置指纹的上游状态：变了就要重启本地服务。默认用预览上游（失败时为空）。
     fn upstream_fingerprint(&self, config: &ClaudeLocalSettings) -> Value {
         self.preview_upstream(config)

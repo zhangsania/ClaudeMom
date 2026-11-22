@@ -114,6 +114,15 @@ impl Host for ClaudeMomHost {
         self.active_upstream()
     }
 
+    #[cfg(windows)]
+    fn prepare_desktop_launch(&self) -> Result<()> {
+        claude_local::desktop_update_policy::disable()
+    }
+
+    fn restrict_desktop_egress(&self) -> bool {
+        true
+    }
+
     fn default_code_share_home(&self) -> bool {
         true
     }

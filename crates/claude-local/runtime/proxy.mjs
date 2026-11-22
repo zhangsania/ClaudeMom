@@ -32,6 +32,9 @@ import { createOfficialAssets, loadCoworkSystemPrompt } from "./official-assets.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const runtime = runtimeConfig();
+const RESTRICT_EGRESS = runtime.managed && process.env.CLAUDE_LOCAL_RESTRICT_EGRESS === "1";
+const OFFICIAL_HOSTS = /(^|\.)(claude\.ai|claude\.com|anthropic\.com)$/i;
+const MAIN_WEB_HOSTS = /^(?:www\.)?claude\.(?:ai|com)$/i;
 const officialAssets = runtime.managed
   ? createOfficialAssets(process.env.CLAUDE_LOCAL_DESKTOP_RESOURCES)
   : null;
@@ -1608,6 +1611,35 @@ function isHashedStaticAsset(req, url) {
     /\/[^/]+-[A-Za-z0-9_-]{8,}\.(?:m?js|css|wasm|woff2?|ttf|otf|png|jpe?g|webp|gif|svg|ico)$/.test(url.pathname);
 }
 
+function allowOfficialAsset(req, url) {
+  if (!["GET", "HEAD"].includes(req.method) || req.headers["transfer-encoding"] ||
+      Number(req.headers["content-length"] || 0) !== 0 || /%(?:00|25|2f|5c)/i.test(url.pathname)) return false;
+  const { hostname, pathname } = url;
+  if (hostname === "downloads.claude.ai") {
+    return /^\/(?:claude-(?:code|ssh)-releases|vms\/linux|releases)\/[\w./-]+$/.test(pathname) ||
+      /^\/model-catalog\/v1\/catalog\.json(?:\.raw-sig\.json)?$/.test(pathname);
+  }
+  if (hostname === "assets.claude.ai") {
+    return /^\/Fonts\/[\w.-]+\.(?:woff2?|ttf|otf)$/.test(pathname);
+  }
+  const prefix = "/claude-ai/v2";
+  const asset = MAIN_WEB_HOSTS.test(hostname) ? pathname
+    : hostname === "assets-proxy.anthropic.com" && pathname.startsWith(`${prefix}/`)
+      ? pathname.slice(prefix.length) : null;
+  return asset !== null && (
+    /^\/(?:assets|audio|images|i18n)\/[\w./-]+\.(?:m?js|css|json|wasm|woff2?|ttf|otf|png|jpe?g|webp|avif|gif|svg|ico|mp3|wav|ogg)$/.test(asset) ||
+    /^\/(?:client-shell-v1\.html|frame-(?:connect|manage|shell)\.html|favicon(?:-(?:internal|staging))?\.ico|scc\.json|third-party-notices\.txt)$/.test(asset)
+  );
+}
+
+function blockEgress(res) {
+  return json(res, { error: "External request blocked by ClaudeMom" }, 403);
+}
+
+function isOriginForm(target) {
+  return target.startsWith("/") && !target.startsWith("//") && !target.includes("\\");
+}
+
 function withoutHopByHop(headers) {
   const result = { ...headers };
   const connectionHeaders = String(result.connection || "").split(",").map((name) => name.trim().toLowerCase());
@@ -1709,6 +1741,10 @@ function serveDocShell(req, res, url) {
     });
     return res.end(cached);
   }
+  if (RESTRICT_EGRESS && (!MAIN_WEB_HOSTS.test(url.hostname) ||
+      !(req.method === "GET" && ["/", "/login", "/new", "/epitaxy"].includes(url.pathname)))) {
+    return blockEgress(res);
+  }
   const base = UPSTREAM_MAP[host] || `https://${host}`;
   const target = new URL("/epitaxy", base);
   // 带上 Claude Desktop 自己的浏览器 UA：只写「Claude」会被 Cloudflare 当成机器人 403。
@@ -1784,6 +1820,7 @@ function forwardGateway(req, res, requestPath, raw) {
 
 // 测试/运维可把某主机的上游重定向到本地 fixture；默认保留原始主机走 https。
 const UPSTREAM_MAP = (() => {
+  if (RESTRICT_EGRESS) return {};
   try { return JSON.parse(process.env.CLAUDE_LOCAL_UPSTREAM_MAP || "{}"); } catch { return {}; }
 })();
 
@@ -1923,6 +1960,7 @@ function upstreamFailureHeaders(req) {
 }
 
 function proxyUpstream(req, res, url) {
+  if (RESTRICT_EGRESS && !allowOfficialAsset(req, url)) return blockEgress(res);
   const cacheKey = `${url.host}${url.pathname}${url.search}`;
   const cp = cachePathFor(cacheKey);
   const metaPath = `${cp}.json`;
@@ -1939,6 +1977,9 @@ function proxyUpstream(req, res, url) {
   // 逐跳头只管 Claude 与本代理之间那一段；转给上游会让它每回一个请求就关连接，连接池复用不了。
   delete headers.connection;
   delete headers["keep-alive"];
+  if (RESTRICT_EGRESS) {
+    for (const name of ["authorization", "proxy-authorization", "x-api-key", "x-goog-api-key", "cookie"]) delete headers[name];
+  }
 
   const upstreamReq = upstreamRequest(
     target,
@@ -2020,11 +2061,13 @@ const demoHtml = MODE === "demo" ? fs.readFileSync(path.join(here, "demo", "inde
 
 function handle(req, res, hostHeader) {
   const host = hostHeader || "claude.ai";
+  if (RESTRICT_EGRESS && !isOriginForm(req.url)) return blockEgress(res);
   const url = new URL(req.url, `https://${host}`);
   noteClient();
   log(`${req.method} ${url.pathname}`);
 
   const hostName = url.hostname.toLowerCase();
+  if (RESTRICT_EGRESS && (!OFFICIAL_HOSTS.test(hostName) || url.port)) return blockEgress(res);
   const isMainClaudeHost = /^(claude\.ai|www\.claude\.ai|claude\.com|www\.claude\.com)$/.test(hostName);
   if (MODE === "mock" && req.method === "GET" &&
       (isMainClaudeHost || hostName === "api.anthropic.com") &&
@@ -2632,6 +2675,7 @@ inner.on("upgrade", handleDictationUpgrade);
 // 外层 HTTP server：CONNECT 做 TLS 终止；普通 HTTP（桌面 CLI 的 ANTHROPIC_BASE_URL 流量）
 // 剥掉桌面端多发、上游网关不认的字段后转给本地 magpie。
 const outer = http.createServer((req, res) => {
+  if (RESTRICT_EGRESS && !isOriginForm(req.url)) return blockEgress(res);
   const u = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
   if (runtime.managed && req.headers.origin !== undefined) return json(res, { error: "Browser origins are not allowed" }, 403);
   if (req.method === "GET" && u.pathname === "/__codex_claude_local/health") return json(res, health());
@@ -2648,7 +2692,7 @@ const outer = http.createServer((req, res) => {
   noteClient();
   const fwd = (body) => forwardGateway(req, res, u.pathname + u.search, body);
   if (req.method === "GET" && u.pathname === "/v1/models") return json(res, modelList(runtime));
-  if (req.method === "POST" && u.pathname === "/v1/messages") {
+  if (req.method === "POST" && (u.pathname === "/v1/messages" || u.pathname === "/v1/messages/count_tokens")) {
     return readBody(req, fwd);
   }
   // 会话 apiHost=127.0.0.1:8899 时，托管设置/policy 也会打到这里：本地 mock，别转 magpie
@@ -2669,12 +2713,13 @@ const outer = http.createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(body), etag: '"local-1"', "cache-control": "no-store" });
     return res.end(body);
   }
+  if (RESTRICT_EGRESS) return blockEgress(res);
   // 其余 HTTP 请求（GET/POST 等）原样转发 magpie
   return readBody(req, fwd);
 });
 
 const MITM_HOSTS = runtime.managed
-  ? /(^|\.)(claude\.ai|claude\.com|anthropic\.com)$/i
+  ? OFFICIAL_HOSTS
   : /(^|\.)(claude\.ai|claude\.com|anthropic\.com|ccbobi\.com)$/i;
 
 const PASS_THROUGH_CONNECT_TIMEOUT_MS = 15_000;
@@ -2753,6 +2798,12 @@ function passThrough(clientSocket, host, port, head) {
 outer.on("connect", (req, clientSocket, head) => {
   noteClient();
   clientSocket.on("error", () => {});
+  if (RESTRICT_EGRESS) {
+    const authority = /^([a-z\d.-]+):443$/i.exec(req.url);
+    if (!authority || !OFFICIAL_HOSTS.test(authority[1])) {
+      return clientSocket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+    }
+  }
   const [host, port = "443"] = req.url.split(":");
   // 非 claude 域名：TCP 直通，不终止 TLS（保证 CDN / 其他服务不受影响）
   if (!MITM_HOSTS.test(host)) {

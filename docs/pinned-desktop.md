@@ -23,15 +23,28 @@ existing gateway authentication and transport in either case.
 gateway. The gateway must support that endpoint; Mom returns its response
 without a local estimate, including when the gateway returns an error.
 
+In full desktop mode, ClaudeMom denies third-party HTTPS tunnels and does
+not forward unhandled official web/API requests. The local gateway listener
+forwards only `POST /v1/messages` and `POST /v1/messages/count_tokens`.
+Existing local responses and selected public Claude UI assets and component
+downloads remain available. Third-party connectors, previews or other
+features may fail where they use the local proxy. This policy does not
+restrict programs that connect independently of ClaudeMom.
+
 Desktop's own updater can be disabled with its documented `disableAutoUpdates`
-policy. ClaudeMom sets this in the gateway configuration it owns when using
-Desktop's third-party gateway mode. For enrolled customer devices, the
-administrator can merge the Windows policy in `scripts/desktop-policy` or
-deliver the equivalent Boolean in the macOS managed preferences domain
-`com.anthropic.claudefordesktop`. Merge into existing policy; do not replace
-unrelated managed preferences. The application does not apply system policy
-or manage updates delivered by operating-system package stores.
-This policy applies only to Claude Desktop; ClaudeMom continues to use this
+policy. On Windows, ClaudeMom sets the current user's
+`HKCU\SOFTWARE\Policies\Claude\disableAutoUpdates` value to `REG_DWORD 1`
+before launching Desktop. This requires no administrator prompt. Desktop
+prefers the machine policy if its key contains any values. ClaudeMom leaves
+that key untouched and reports a launch error if it cannot confirm that the
+machine policy disables updates. This neither downgrades Desktop nor changes
+Microsoft Store updates.
+
+ClaudeMom also sets the equivalent gateway configuration in Desktop's third-party
+gateway mode. Administrators can apply the Windows policy directly from
+`scripts/desktop-policy` or deliver the equivalent Boolean in the macOS managed
+preferences domain `com.anthropic.claudefordesktop`. Merge into existing policy;
+do not replace unrelated managed preferences. ClaudeMom continues to use this
 fork's updater feed.
 
 For the Sub2API create-key dialog, stage the finished ClaudeMom installers at

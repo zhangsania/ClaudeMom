@@ -455,10 +455,12 @@ test("installed template with its own shell never serves an online or cached she
 
 test("upstream fetches share a bounded, reused connection pool through the upstream proxy", async () => {
   // 首次启动要补拉上千个资源：之前每个请求单独 CONNECT 一条隧道，代理软件里刷出上千条 node 连接。
+  const fetched = [];
   const tlsServer = https.createServer({
     key: fs.readFileSync(path.join(here, "ca/server.key")),
     cert: fs.readFileSync(path.join(here, "ca/server.crt")),
   }, async (req, res) => {
+    fetched.push({ pathname: req.url, headers: req.headers });
     await delay(20);
     res.writeHead(200, { "content-type": "text/javascript", "cache-control": "no-store" });
     res.end(`// ${req.url}`);
@@ -482,6 +484,7 @@ test("upstream fetches share a bounded, reused connection pool through the upstr
   upstreamProxy.listen(0, "127.0.0.1");
   await once(upstreamProxy, "listening");
   const instance = await start({
+    CLAUDE_LOCAL_RESTRICT_EGRESS: "1",
     CLAUDE_LOCAL_CACHE_DIR: path.join(root, "pool-cache"),
     CLAUDE_LOCAL_UPSTREAM_PROXY: `http://127.0.0.1:${upstreamProxy.address().port}`,
     NODE_EXTRA_CA_CERTS: path.join(here, "ca/ca.pem"),
@@ -499,6 +502,15 @@ test("upstream fetches share a bounded, reused connection pool through the upstr
     const opened = connects.length;
     for (let i = 0; i < 40; i++) assert.equal((await fetchAsset(`later-${i}`)).status, 200);
     assert.equal(connects.length, opened, "之后的请求复用已有连接，不再新开隧道");
+    const downloadPath = "/claude-code-releases/2.1.325/win32-x64/claude.exe";
+    const downloaded = await request(instance, downloadPath, {
+      host: "downloads.claude.ai",
+      extraHeaders: { authorization: "Bearer synthetic", cookie: "session=fictional" },
+    });
+    assert.equal(downloaded.status, 200);
+    assert.equal(fetched.at(-1).pathname, downloadPath);
+    assert.equal(fetched.at(-1).headers.authorization, undefined);
+    assert.equal(fetched.at(-1).headers.cookie, undefined);
     // 同一条复用的连接上跑过几十个请求，不能每次都往 socket 上叠监听器（#16 看到过这个警告）。
     assert.equal(instance.output().includes("MaxListenersExceededWarning"), false, instance.output());
   } finally {
@@ -776,6 +788,77 @@ test("pass-through tunnels use the configured upstream proxy and abort when Clau
     await stop(instance);
     upstreamProxy.closeAllConnections();
     upstreamProxy.close();
+  }
+});
+
+test("ClaudeMom rejects third-party connections and unknown APIs before dialing an upstream", async () => {
+  const connects = [];
+  const relay = http.createServer();
+  relay.on("connect", (req, socket) => {
+    connects.push(req.url);
+    socket.end("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+  });
+  relay.listen(0, "127.0.0.1");
+  await once(relay, "listening");
+  const instance = await start({
+    CLAUDE_LOCAL_RESTRICT_EGRESS: "1",
+    CLAUDE_LOCAL_UPSTREAM_PROXY: `http://127.0.0.1:${relay.address().port}`,
+  });
+  try {
+    for (const target of [
+      "o123456.ingest.us.sentry.io:443", "browser-intake-us5-datadoghq.com:443",
+      "events.statsigapi.net:443", "api.statsig.com:443", "cdnjs.cloudflare.com:443",
+      "assets.claude.ai.third-party.test:443", "api.anthropic.com:8443",
+    ]) {
+      const connect = http.request({ host: "127.0.0.1", port: instance.port, method: "CONNECT", path: target });
+      connect.end();
+      const [response, socket] = await once(connect, "connect");
+      socket.destroy();
+      assert.equal(response.statusCode, 403, target);
+    }
+
+    const before = received.length;
+    for (const [host, pathname, method] of [
+      ["api.anthropic.com", "/api/event_logging/v2/batch", "POST"],
+      ["api.anthropic.com", "/v1/unknown.json", "GET"],
+      ["auth.claude.com", "/api/unimplemented", "GET"],
+      ["downloads.claude.ai", "/api/unimplemented.json", "GET"],
+      ["assets.claude.ai", "/api/unimplemented.woff2", "GET"],
+      ["assets-proxy.anthropic.com", "/claude-ai/v2/api/unimplemented.js", "GET"],
+      ["assets-proxy.anthropic.com", "/claude-ai/v2/assets/main.js", "POST"],
+      ["claude.ai", "/unhandled", "POST"],
+      [undefined, "/api/event_logging/v2/batch", "POST"],
+      [undefined, "http://third-party.test/anything", "GET"],
+    ]) {
+      const result = await request(instance, pathname, {
+        host, method, ...(method === "POST" ? { body: { fixture: true } } : {}),
+      });
+      assert.equal(result.status, 403, `${method} ${host} ${pathname}`);
+    }
+
+    for (const [host, pathname] of [
+      ["api.anthropic.com", "/v1/models"],
+      ["claude.ai", "/api/account"],
+      ["assets-proxy.anthropic.com", "/claude-ai/v2/assets/v1/main.js"],
+    ]) {
+      assert.equal((await request(instance, pathname, { host })).status, 200);
+    }
+    assert.equal(received.length, before);
+    assert.deepEqual(connects, []);
+
+    for (const host of [undefined, "api.anthropic.com"]) {
+      for (const pathname of ["/v1/messages", "/v1/messages/count_tokens"]) {
+        const body = { model: modelIds[0], messages: [{ role: "user", content: "synthetic" }] };
+        assert.equal((await request(instance, pathname + "?beta=true", { host, body })).status, 200);
+        assert.deepEqual(received.at(-1).body, body);
+        assert.equal(received.at(-1).path, `/gw/desktop${pathname}?beta=true`);
+      }
+    }
+    assert.deepEqual(connects, []);
+  } finally {
+    await stop(instance);
+    relay.closeAllConnections();
+    await new Promise((resolve) => relay.close(resolve));
   }
 });
 
