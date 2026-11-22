@@ -29,6 +29,7 @@ import { createConversationService } from "./conversation-service.mjs";
 import { isPatchedStartupAsset, startupAssets } from "./scripts/patch-dictation-start.mjs";
 import { createGatewayStreamParser, createStateStore, gatewayBody, gatewayHttpError, gatewayModel, gatewayTarget, isPrivateFile, mergePoolModels, modelList, modelSelectors, modelWindow, planProfile, runtimeConfig } from "./runtime.mjs";
 import { createOfficialAssets, loadCoworkSystemPrompt } from "./official-assets.mjs";
+import { createNativeTitles } from "./native-title.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const runtime = runtimeConfig();
@@ -415,6 +416,12 @@ function localI18n(pathname) {
 // ── 工具 ─────────────────────────────────────────────────────
 const now = () => new Date().toISOString();
 const log = (...a) => LOG && console.log(`[${now()}]`, ...a);
+const nativeTitles = createNativeTitles({
+  roots: JSON.parse(process.env.CLAUDE_LOCAL_DESKTOP_CODE_ROOTS || "[]"),
+  port: () => listeningPort,
+  model: runtime.smallModel,
+  onUnavailable: (reason) => log("Native title unavailable:", reason),
+});
 
 // Chat 的 completion 请求体字段随客户端版本变化：从常见位置兜底取最近一条用户文本（跳过助手消息）。
 function firstUserText(value, depth = 0) {
@@ -909,79 +916,8 @@ function fallbackSessionTitle(rawText, emptyFallback = "New task") {
   return cleaned.length > 30 ? `${cleaned.slice(0, 30)}…` : cleaned;
 }
 
-function sanitizeGeneratedTitle(raw) {
-  if (typeof raw !== "string") return "";
-  const tagged = raw.match(/<title>([\s\S]*?)<\/title>/i);
-  const line = (tagged ? tagged[1] : raw)
-    .replace(/\r?\n[\s\S]*$/, "")
-    .replace(/^["'“”‘’`*#:\s]+|["'“”‘’`*\s]+$/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!line) return "";
-  return line.length > 80 ? `${line.slice(0, 80)}…` : line;
-}
-
-function generateSessionTitle(rawText, requestedModel, emptyFallback, callback) {
-  const input = extractTitleInput(rawText);
-  const fallback = fallbackSessionTitle(input, emptyFallback);
-  if (!input) return callback(fallback);
-  let target;
-  try {
-    target = gatewayTarget(runtime, "/v1/messages");
-  } catch {
-    return callback(fallback);
-  }
-  const model = gatewayModel(runtime, runtime.smallModel || requestedModel || runtime.model);
-  const payload = JSON.stringify({
-    model,
-    max_tokens: 128,
-    stream: false,
-    // 推理模型默认先输出 thinking，标题这种短任务会被 thinking 吃满 budget。
-    thinking: { type: "disabled" },
-    system: "Generate a concise session title (3-8 words or short Chinese phrase) in the same language as the user message. Reply with only the title, no quotes or markdown.",
-    messages: [{ role: "user", content: input.slice(0, 2000) }],
-  });
-  let settled = false;
-  const finish = (title) => {
-    if (settled) return;
-    settled = true;
-    callback(title || fallback);
-  };
-  const greq = (target.protocol === "https:" ? https : http).request(
-    {
-      hostname: target.hostname,
-      port: target.port || (target.protocol === "https:" ? 443 : 80),
-      path: target.pathname + target.search,
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "content-length": Buffer.byteLength(payload),
-        authorization: `Bearer ${runtime.key}`,
-        "anthropic-version": "2023-06-01",
-      },
-      // 网关在跑长任务时首字可能排队：标题生成等久一点，别退回“截断提示词”。
-      timeout: 20000,
-    },
-    (gres) => {
-      const chunks = [];
-      gres.on("data", (chunk) => chunks.push(chunk));
-      gres.on("end", () => {
-        if (gres.statusCode !== 200) return finish(fallback);
-        try {
-          const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          const text = Array.isArray(data.content)
-            ? data.content.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("")
-            : (typeof data.completion === "string" ? data.completion : "");
-          finish(sanitizeGeneratedTitle(text) || fallback);
-        } catch {
-          finish(fallback);
-        }
-      });
-    },
-  );
-  greq.on("timeout", () => { greq.destroy(); finish(fallback); });
-  greq.on("error", () => finish(fallback));
-  greq.end(payload);
+async function sessionTitle(description, emptyFallback) {
+  return (await nativeTitles.generate(description)) ?? fallbackSessionTitle(description, emptyFallback);
 }
 
 function mockApi(req, res, url) {
@@ -1370,21 +1306,21 @@ function mockApi(req, res, url) {
   if (/^\/api\/organizations\/[^/]+$/.test(p)) {
     return json(res, ORG);
   }
+  // The recorded UI delegates title generation to the original Claude Code SDK.
   if (/\/dust\/generate_session_title$/.test(p) && method === "POST") {
-    return readBody(req, (raw) => {
+    return readBody(req, async (raw) => {
       const body = decodeJsonBody(req, raw);
       const firstMsg = body.first_session_message ?? body.message ?? body.prompt ?? "";
-      generateSessionTitle(firstMsg, body.model, "New task", (title) => json(res, { title }));
+      return json(res, { title: await sessionTitle(firstMsg, "New task") });
     });
   }
   if (/\/dust\/generate_title_and_branch$/.test(p) && method === "POST") {
-    return readBody(req, (raw) => {
+    return readBody(req, async (raw) => {
       const body = decodeJsonBody(req, raw);
       const firstMsg = body.first_session_message ?? body.message ?? body.prompt ?? "";
-      generateSessionTitle(firstMsg, body.model, "New session", (title) => {
-        const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 50).replace(/-+$/, "");
-        json(res, { title, branch_name: slug ? `claude/${slug}` : undefined });
-      });
+      const title = await sessionTitle(firstMsg, "New session");
+      const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 50).replace(/-+$/, "");
+      return json(res, { title, branch_name: slug ? `claude/${slug}` : undefined });
     });
   }
   if (/\/chat_conversations$/.test(p)) {
@@ -1407,21 +1343,18 @@ function mockApi(req, res, url) {
   }
   const convTitleMatch = p.match(/\/chat_conversations\/([0-9a-f-]{36})\/title$/);
   if (convTitleMatch && method === "POST") {
-    return readBody(req, (raw) => {
+    return readBody(req, async (raw) => {
       const body = decodeJsonBody(req, raw);
       const conv = ensureConv(convTitleMatch[1]);
       const firstHuman = conv.chat_messages.find((m) => m.sender === "human")?.text || "";
       const source = typeof body.message_content === "string" && body.message_content.trim()
         ? body.message_content
         : firstHuman;
-      generateSessionTitle(source, conv.model, "New conversation", (title) => {
-        if (title) {
-          conv.name = title;
-          conv.updated_at = now();
-          stateStore.flush();
-        }
-        json(res, { title });
-      });
+      const title = await sessionTitle(source, "New conversation");
+      conv.name = title;
+      conv.updated_at = now();
+      stateStore.flush();
+      return json(res, { title });
     });
   }
   const convMatch = p.match(/\/chat_conversations\/([^/]+)$/);
@@ -1789,10 +1722,10 @@ function serveDocShell(req, res, url) {
   up.end();
 }
 
-function forwardGateway(req, res, requestPath, raw) {
+function forwardGateway(req, res, requestPath, raw, { preserveBody = false } = {}) {
   let body = raw;
   const requested = new URL(requestPath, "http://localhost");
-  if (req.method === "POST" && requested.pathname === "/v1/messages") {
+  if (!preserveBody && req.method === "POST" && requested.pathname === "/v1/messages") {
     try { body = gatewayBody(runtime, raw); }
     catch { return json(res, { error: "Invalid model request" }, 400); }
   }
@@ -1815,6 +1748,7 @@ function forwardGateway(req, res, requestPath, raw) {
     json(res, { type: "error", error: { type: "api_error", message: "Local gateway unavailable" } }, 502);
   });
   req.once("aborted", () => up.destroy());
+  res.once("close", () => { if (!res.writableEnded) up.destroy(); });
   up.end(body);
 }
 
@@ -2684,6 +2618,12 @@ const outer = http.createServer((req, res) => {
   const u = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
   if (runtime.managed && req.headers.origin !== undefined) return json(res, { error: "Browser origins are not allowed" }, 403);
   if (req.method === "GET" && u.pathname === "/__codex_claude_local/health") return json(res, health());
+  const authorization = req.headers.authorization;
+  if (typeof authorization === "string" && authorization.startsWith("Bearer ") &&
+      nativeTitles.accepts(authorization.slice(7))) {
+    if (req.method !== "POST" || u.pathname !== "/v1/messages") return blockEgress(res);
+    return readBody(req, (body) => forwardGateway(req, res, u.pathname + u.search, body, { preserveBody: true }));
+  }
   if (runtime.managed) {
     const bearer = typeof req.headers.authorization === "string" && req.headers.authorization.startsWith("Bearer ")
       ? req.headers.authorization.slice(7) : "";

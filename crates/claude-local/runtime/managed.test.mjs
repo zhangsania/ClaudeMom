@@ -178,7 +178,7 @@ before(async () => {
     "audio/tone.mp3": Buffer.from([0x49, 0x44, 0x33]),
   });
   fs.mkdirSync(path.join(root, "runtime", "scripts"), { recursive: true });
-  for (const file of ["proxy.mjs", "conversation-service.mjs", "rpc.mjs", "runtime.mjs", "official-assets.mjs", "scripts/patch-dictation-start.mjs"]) {
+  for (const file of ["proxy.mjs", "native-title.mjs", "conversation-service.mjs", "rpc.mjs", "runtime.mjs", "official-assets.mjs", "scripts/patch-dictation-start.mjs"]) {
     fs.copyFileSync(path.join(here, file), path.join(root, "runtime", file));
   }
   fs.copyFileSync(
@@ -200,7 +200,7 @@ before(async () => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const raw = Buffer.concat(chunks).toString("utf8");
-    received.push({ path: req.url, headers: req.headers, body: raw ? JSON.parse(raw) : null });
+    received.push({ path: req.url, headers: req.headers, raw, body: raw ? JSON.parse(raw) : null });
     // 用最后一条用户消息挑选上游的「坏」行为，模拟各家网关不规范的回法。
     const last = raw ? JSON.parse(raw).messages?.at(-1)?.content : null;
     if (last === "case:http-401") {
@@ -237,6 +237,86 @@ after(async () => {
   await stop(service);
   gateway?.closeAllConnections();
   await new Promise((resolve) => gateway?.close(resolve));
+});
+
+test("the native title bridge forwards the SDK's bytes and only its model request", async () => {
+  const code = path.join(root, "fixture-code");
+  const install = path.join(code, "2.1.325", "a".repeat(12));
+  fs.mkdirSync(install, { recursive: true });
+  fs.writeFileSync(path.join(install, ".verified"), "a".repeat(64));
+  const binary = path.join(install, process.platform === "win32" ? "claude.exe" : "claude");
+  fs.writeFileSync(binary, "");
+  const wire = '{ "model": "fixture-unmapped", "messages": [{"role":"user","content":"case:json"}], "diagnostics": {} }\n';
+  const fixture = `
+    import assert from "node:assert/strict";
+    import cp from "node:child_process";
+    import { EventEmitter } from "node:events";
+    import http from "node:http";
+    import { syncBuiltinESMExports } from "node:module";
+    import { PassThrough } from "node:stream";
+    const spawn = cp.spawn;
+    cp.spawn = (file, args, opts) => {
+      if (file !== ${JSON.stringify(fs.realpathSync(binary))}) return spawn(file, args, opts);
+      const base = new URL(opts.env.ANTHROPIC_BASE_URL);
+      assert.equal(base.hostname, "127.0.0.1");
+      assert.equal(base.protocol, "http:");
+      const authorization = "Bearer " + opts.env.ANTHROPIC_AUTH_TOKEN;
+      const call = (pathname, body) => new Promise((resolve, reject) => {
+        const headers = { authorization, "user-agent": "fixture-sdk" };
+        if (body) {
+          headers["content-type"] = "application/json";
+          headers["content-length"] = Buffer.byteLength(body);
+        }
+        const request = http.request(new URL(pathname, base), {
+          method: body ? "POST" : "GET", headers, agent: false,
+        }, (res) => {
+          let raw = "";
+          res.setEncoding("utf8").on("data", (chunk) => { raw += chunk; });
+          res.on("end", () => resolve({ status: res.statusCode, raw }));
+        });
+        request.on("error", reject);
+        request.end(body);
+      });
+      const child = new EventEmitter();
+      child.stdin = new PassThrough();
+      child.stdout = new PassThrough();
+      child.kill = () => queueMicrotask(() => child.emit("close", 0));
+      child.stdin.on("data", async (line) => {
+        const { request_id, request } = JSON.parse(line);
+        let response = {};
+        if (request.subtype === "generate_session_title") {
+          const blocked = await call("/v1/models");
+          assert.equal(blocked.status, 403);
+          const upstream = await call("/v1/messages?beta=true", ${JSON.stringify(wire)});
+          assert.equal(upstream.status, 200);
+          response = { title: JSON.parse(upstream.raw).content[0].text };
+        }
+        child.stdout.write(JSON.stringify({ type: "control_response", response: { request_id, subtype: "success", response } }) + "\\n");
+      });
+      return child;
+    };
+    syncBuiltinESMExports();
+  `;
+  const instance = await start({
+    CLAUDE_LOCAL_DESKTOP_CODE_ROOTS: JSON.stringify([code]),
+    CLAUDE_LOCAL_PRESERVE_MESSAGE_BODY: "0",
+    NODE_OPTIONS: [process.env.NODE_OPTIONS, "--import=data:text/javascript," + encodeURIComponent(fixture)].filter(Boolean).join(" "),
+  });
+  try {
+    const before = received.length;
+    const title = await request(instance, "/api/organizations/fixture/dust/generate_session_title", {
+      host: "claude.ai", body: { first_session_message: "Fixture request" },
+    });
+    assert.deepEqual(title.json, { title: "whole json reply" });
+    assert.equal(received.length, before + 1);
+    const forwarded = received.at(-1);
+    assert.equal(forwarded.raw, wire);
+    assert.equal(forwarded.path, "/gw/desktop/v1/messages?beta=true");
+    assert.equal(forwarded.headers["user-agent"], "fixture-sdk");
+    assert.equal(forwarded.headers.authorization, "Bearer test-local-gateway-token");
+  } finally {
+    await stop(instance);
+  }
 });
 
 test("managed readiness reports an assigned port and health polling is not client traffic", async () => {

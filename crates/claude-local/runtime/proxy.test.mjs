@@ -935,7 +935,8 @@ for (const host of [undefined, "api.anthropic.com", "claude.ai"]) {
   });
 }
 
-test("chat and cowork session title endpoints generate and persist titles via gateway", async () => {
+test("recorded Desktop title endpoints fall back without model requests when Claude Code is unavailable", async () => {
+  const gatewayCalls = gatewayRequests.length;
   const created = await request("/api/organizations/11111111-2222-4333-8444-555555555556/chat_conversations", {
     host: "claude.ai",
     body: {},
@@ -951,14 +952,14 @@ test("chat and cowork session title endpoints generate and persist titles via ga
     },
   );
   assert.equal(titled.status, 200);
-  assert.equal(titled.body.title, "ok");
+  assert.equal(titled.body.title, "Golden Gate Bridge presentatio…");
 
   const fetched = await request(
     `/api/organizations/11111111-2222-4333-8444-555555555556/chat_conversations/${created.body.uuid}`,
     { host: "claude.ai" },
   );
   assert.equal(fetched.status, 200);
-  assert.equal(fetched.body.name, "ok");
+  assert.equal(fetched.body.name, titled.body.title);
   assert.deepEqual(fetched.body.settings, {});
   assert.deepEqual(fetched.body.files, []);
   assert.deepEqual(fetched.body.sync_sources, []);
@@ -968,7 +969,15 @@ test("chat and cowork session title endpoints generate and persist titles via ga
     { host: "claude.ai", body: { first_session_message: "Build a Golden Gate Bridge PowerPoint", surface: "cowork" } },
   );
   assert.equal(coworkTitle.status, 200);
-  assert.equal(coworkTitle.body.title, "ok");
+  assert.equal(coworkTitle.body.title, "Build a Golden Gate Bridge Pow…");
+
+  const codeTitle = await request(
+    "/api/organizations/11111111-2222-4333-8444-555555555556/dust/generate_title_and_branch",
+    { host: "claude.ai", body: { first_session_message: "Add a title fixture" } },
+  );
+  assert.equal(codeTitle.status, 200);
+  assert.deepEqual(codeTitle.body, { title: "Add a title fixture", branch_name: "claude/add-a-title-fixture" });
+  assert.equal(gatewayRequests.length, gatewayCalls);
 });
 
 test("document navigations replay the app shell rather than logged-out landing stubs", async () => {

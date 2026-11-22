@@ -63,6 +63,10 @@ const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("../runtime/proxy.mjs"),
     ),
     (
+        "native-title.mjs",
+        include_bytes!("../runtime/native-title.mjs"),
+    ),
+    (
         "page-shim.js",
         include_bytes!("../assets/localization/page-shim.js"),
     ),
@@ -1927,6 +1931,11 @@ fn start_backend(
     let instance = uuid::Uuid::new_v4().to_string();
     let ready_file = root.join("ready.json");
     let log = private_file(&root.join("proxy.log"))?;
+    let desktop_code_roots: Vec<_> = profile_sets()
+        .into_iter()
+        .filter(|_| !config.three_p_mode)
+        .map(|profile| profile.data.join("claude-code"))
+        .collect();
     let mut command = hidden_command(node);
     command
         .arg(root.join("proxy.mjs"))
@@ -1953,6 +1962,10 @@ fn start_backend(
         .env(
             "CLAUDE_LOCAL_DESKTOP_RESOURCES",
             desktop_resources(&source_app()),
+        )
+        .env(
+            "CLAUDE_LOCAL_DESKTOP_CODE_ROOTS",
+            serde_json::to_string(&desktop_code_roots)?,
         )
         .env("CLAUDE_LOCAL_GATEWAY_URL", &upstream.root)
         .env("CLAUDE_LOCAL_GATEWAY_KEY", &upstream.token)

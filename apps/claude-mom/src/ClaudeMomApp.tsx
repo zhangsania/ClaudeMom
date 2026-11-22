@@ -19,6 +19,8 @@ export function ClaudeMomApp() {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [tab, setTab] = useState<Tab>("upstream");
+  const [deleteTarget, setDeleteTarget] = useState<UpstreamProfile | null>(null);
+  const deleteDialog = useRef<HTMLDialogElement>(null);
   const pending = useRef(false);
 
   const say = (text: string, tone: "ok" | "error" = "ok") => setNotice(text ? { text, tone } : null);
@@ -150,6 +152,30 @@ export function ClaudeMomApp() {
       return result;
     });
 
+  const requestDelete = (profile: UpstreamProfile) => {
+    if (pending.current) return;
+    setDeleteTarget(profile);
+    deleteDialog.current?.showModal();
+  };
+
+  const confirmDelete = () => {
+    const profile = deleteTarget;
+    if (!profile || pending.current) return;
+    deleteDialog.current?.close();
+    void run("delete", async () => {
+      const result = await invoke<CommandResult<UpstreamBook>>("claude_mom_delete_profile", { id: profile.id });
+      if (isOk(result)) {
+        if (draft && draft.id !== profile.id) {
+          setBook({ profiles: result.profiles ?? [], activeId: result.activeId ?? null });
+        } else {
+          acceptBook(result);
+        }
+        await refreshStatus();
+      }
+      say(result.message, isOk(result) ? "ok" : "error");
+    });
+  };
+
   const active = book.profiles.find((profile) => profile.id === book.activeId) ?? null;
   const dirty = useMemo(() => {
     if (!draft) return false;
@@ -217,22 +243,31 @@ export function ClaudeMomApp() {
         <div className="cm-side-label">上游</div>
         <nav className="cm-list" aria-label="上游">
           {book.profiles.map((profile) => (
-            <button
-              aria-current={profile.id === selectedId ? "true" : undefined}
-              className="cm-item"
-              key={profile.id}
-              onClick={() => select(profile.id)}
-              onDoubleClick={() => void bookCall("activate", "claude_mom_set_active", { id: profile.id }, profile.id)}
-              title="双击设为当前"
-              type="button"
-            >
-              <span className="cm-radio" data-on={profile.id === book.activeId || undefined} />
-              <span className="cm-item-text">
-                <span className="cm-item-name">{profile.name || hostOf(profile.baseUrl)}</span>
-                <span className="cm-item-sub">{profile.model ? modelLabel(profile, profile.model) : hostOf(profile.baseUrl)}</span>
-              </span>
-              {profile.source !== "manual" ? <span className="cm-tag">{SOURCE_LABELS[profile.source] ?? profile.source}</span> : null}
-            </button>
+            <div className="cm-item-row" data-selected={profile.id === selectedId || undefined} key={profile.id}>
+              <button
+                aria-current={profile.id === selectedId ? "true" : undefined}
+                className="cm-item"
+                onClick={() => select(profile.id)}
+                onDoubleClick={() => void bookCall("activate", "claude_mom_set_active", { id: profile.id }, profile.id)}
+                title="双击设为当前"
+                type="button"
+              >
+                <span className="cm-radio" data-on={profile.id === book.activeId || undefined} />
+                <span className="cm-item-text">
+                  <span className="cm-item-name">{profile.name || hostOf(profile.baseUrl)}</span>
+                  <span className="cm-item-sub">{profile.model ? modelLabel(profile, profile.model) : hostOf(profile.baseUrl)}</span>
+                </span>
+                {profile.source !== "manual" ? <span className="cm-tag">{SOURCE_LABELS[profile.source] ?? profile.source}</span> : null}
+              </button>
+              <button
+                aria-label={`删除上游：${profile.name || hostOf(profile.baseUrl)}`}
+                className="cm-icon cm-item-delete"
+                disabled={busy !== null}
+                onClick={() => requestDelete(profile)}
+                title="删除这组上游"
+                type="button"
+              ><Trash2 /></button>
+            </div>
           ))}
           {draft && !draft.id ? (
             <div className="cm-item" aria-current="true">
@@ -248,6 +283,13 @@ export function ClaudeMomApp() {
         </div>
       </aside>
 
+      <dialog aria-labelledby="cm-delete-title" className="cm-delete-dialog" onClose={() => setDeleteTarget(null)} ref={deleteDialog}>
+        <strong id="cm-delete-title">删除上游「{deleteTarget && (deleteTarget.name || hostOf(deleteTarget.baseUrl))}」？</strong>
+        <div className="cm-delete-actions">
+          <button className="cm-btn" onClick={() => deleteDialog.current?.close()} type="button">取消</button>
+          <button className="cm-btn cm-btn-danger" disabled={busy !== null} onClick={confirmDelete} type="button"><Trash2 />删除</button>
+        </div>
+      </dialog>
       <main className="cm-main">
         <header className="cm-toolbar" data-tauri-drag-region>
           <span className="cm-dot" data-tone={state.tone} />
@@ -302,7 +344,7 @@ export function ClaudeMomApp() {
                 draft={draft}
                 onActivate={() => void bookCall("activate", "claude_mom_set_active", { id: draft.id }, draft.id)}
                 onChange={setDraft}
-                onDelete={() => void bookCall("delete", "claude_mom_delete_profile", { id: draft.id })}
+                onDelete={() => requestDelete(draft)}
                 onDiscard={() => {
                   const saved = book.profiles.find((profile) => profile.id === draft.id);
                   if (saved) setDraft({ ...saved });
