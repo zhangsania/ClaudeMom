@@ -506,7 +506,6 @@ pub async fn fetch_models(base_url: &str, api_key: &str) -> Result<Vec<UpstreamM
     for url in urls {
         let response = client
             .get(url.clone())
-            .header("x-api-key", api_key.trim())
             .bearer_auth(api_key.trim())
             .header("anthropic-version", "2023-06-01")
             .send()

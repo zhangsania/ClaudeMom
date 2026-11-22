@@ -46,7 +46,6 @@ function anthropicStream(messages, model, signal) {
       method: "POST", timeout: 300000,
       headers: {
         "content-type": "application/json",
-        "x-api-key": runtime.key,
         authorization: `Bearer ${runtime.key}`,
         "anthropic-version": "2023-06-01",
         accept: "text/event-stream",

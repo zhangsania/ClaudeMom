@@ -953,7 +953,6 @@ function generateSessionTitle(rawText, requestedModel, emptyFallback, callback) 
       headers: {
         "content-type": "application/json",
         "content-length": Buffer.byteLength(payload),
-        "x-api-key": runtime.key,
         authorization: `Bearer ${runtime.key}`,
         "anthropic-version": "2023-06-01",
       },
@@ -1512,7 +1511,6 @@ function mockApi(req, res, url) {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "x-api-key": runtime.key,
             authorization: `Bearer ${runtime.key}`,
             "anthropic-version": "2023-06-01",
             accept: "text/event-stream",
@@ -1765,9 +1763,9 @@ function forwardGateway(req, res, requestPath, raw) {
   const target = gatewayTarget(runtime, requestPath);
   const headers = {
     ...req.headers, host: target.host, "content-length": body.length,
-    "x-api-key": runtime.key, authorization: `Bearer ${runtime.key}`,
+    authorization: `Bearer ${runtime.key}`,
   };
-  for (const key of ["proxy-connection", "connection", "cookie", "transfer-encoding"]) delete headers[key];
+  for (const key of ["x-api-key", "x-goog-api-key", "proxy-connection", "connection", "cookie", "transfer-encoding"]) delete headers[key];
   const up = (target.protocol === "https:" ? https : http).request({
     hostname: target.hostname, port: target.port || (target.protocol === "https:" ? 443 : 80),
     path: target.pathname + target.search, method: req.method, headers, timeout: 300000,

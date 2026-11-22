@@ -926,17 +926,27 @@ test("selected model falls back to the gateway default window instead of 200k", 
 test("gateway forwarding preserves the configured root, authentication and selected provider/model", async () => {
   for (const host of [undefined, "api.anthropic.com"]) {
     const result = await request(service, "/v1/messages?choice=1", {
-      host, body: { model: modelIds[2], messages: [{ role: "user", content: "test prompt" }], diagnostics: {}, metadata: { diagnostics: {}, user_id: "preserved" } },
+      host, extraHeaders: { "x-api-key": "test-local-gateway-token", "x-goog-api-key": "test-unused-key" },
+      body: { model: modelIds[2], messages: [{ role: "user", content: "test prompt" }], diagnostics: {}, metadata: { diagnostics: {}, user_id: "preserved" } },
     });
     assert.equal(result.status, 200);
     const call = received.at(-1);
     assert.equal(call.path, "/gw/desktop/v1/messages?choice=1");
     assert.equal(call.headers.authorization, "Bearer test-local-gateway-token");
-    assert.equal(call.headers["x-api-key"], "test-local-gateway-token");
+    assert.equal(call.headers["x-api-key"], undefined);
+    assert.equal(call.headers["x-goog-api-key"], undefined);
     assert.equal(call.body.model, modelIds[2]);
     assert.deepEqual(call.body.diagnostics, {});
     assert.deepEqual(call.body.metadata, { diagnostics: {}, user_id: "preserved" });
   }
+  const count = await request(service, "/v1/messages/count_tokens?beta=true", {
+    extraHeaders: { "x-api-key": "test-local-gateway-token" },
+    body: { model: modelIds[2], messages: [{ role: "user", content: "count prompt" }] },
+  });
+  assert.equal(count.status, 200);
+  assert.equal(received.at(-1).path, "/gw/desktop/v1/messages/count_tokens?beta=true");
+  assert.equal(received.at(-1).headers.authorization, "Bearer test-local-gateway-token");
+  assert.equal(received.at(-1).headers["x-api-key"], undefined);
   const result = await request(service, "/v1/models");
   assert.deepEqual(result.json.data.map((entry) => entry.id), modelIds);
 });
@@ -964,6 +974,8 @@ test("RPC sends preserve model choice, switching, complete history and restart s
   });
   await rpc("SendAndSettle", send(conv, "first test", modelIds[1]));
   assert.equal(received.at(-1).body.model, modelIds[1]);
+  assert.equal(received.at(-1).headers.authorization, "Bearer test-local-gateway-token");
+  assert.equal(received.at(-1).headers["x-api-key"], undefined);
   const switchModel = Buffer.concat([header(conv), ld(27, ld(1, ld(2, modelIds[2])))]);
   await rpc("PerformAction", switchModel);
   await rpc("SendAndSettle", send(conv, "second test"));
