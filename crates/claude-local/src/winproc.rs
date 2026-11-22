@@ -636,6 +636,26 @@ fn quote_win_arg(arg: &str) -> String {
     out
 }
 
+pub fn open_in_default_browser(url: &str) -> anyhow::Result<()> {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::{HSTRING, PCWSTR, w};
+
+    let url = HSTRING::from(url);
+    let result = unsafe {
+        ShellExecuteW(
+            HWND::default(),
+            w!("open"),
+            &url,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    anyhow::ensure!(result.0 as isize > 32, "无法打开系统默认浏览器");
+    Ok(())
+}
+
 #[cfg(windows)]
 pub fn run_elevated_certutil(args: &[&str], timeout: std::time::Duration) -> anyhow::Result<()> {
     use std::ffi::OsStr;

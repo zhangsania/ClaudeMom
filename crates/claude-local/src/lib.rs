@@ -6,8 +6,6 @@
 mod backend;
 pub mod cli_import;
 pub mod desktop;
-#[cfg(windows)]
-pub mod desktop_update_policy;
 pub mod fsutil;
 mod host;
 pub mod node;
@@ -27,6 +25,8 @@ pub use backend::{
 };
 pub use host::{Host, Upstream, install_host};
 pub use settings::ClaudeLocalSettings;
+#[cfg(target_os = "windows")]
+pub use backend::windows_desktop_version_for_update;
 
 /// Windows 上启动子进程不弹控制台窗口。
 #[cfg(windows)]

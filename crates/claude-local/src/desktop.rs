@@ -7,6 +7,8 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
+#[cfg(any(target_os = "windows", test))]
+use sha2::{Digest, Sha256};
 
 /// 单次探测（启动 PowerShell / defaults 等）的上限。
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(12);
@@ -73,9 +75,89 @@ pub fn source_app(_deadline: Instant) -> Result<PathBuf> {
 
 #[cfg(target_os = "windows")]
 pub fn source_app(deadline: Instant) -> Result<PathBuf> {
+    source_app_with_pin(deadline, None)
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Clone, Copy)]
+pub struct WindowsDesktopPin<'a> {
+    pub version: &'a str,
+    pub exe_sha256: &'a str,
+    pub asar_sha256: &'a str,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl WindowsDesktopPin<'_> {
+    pub fn matches(self, exe: &Path) -> bool {
+        let Some(parent) = exe.parent() else { return false };
+        file_matches_sha256(&parent.join("resources").join("app.asar"), self.asar_sha256)
+            && file_matches_sha256(exe, self.exe_sha256)
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn windows_pinned_install_dir(local: &Path, version: &str) -> PathBuf {
+    local.join("Programs").join("ClaudeMom").join(format!("Desktop-{version}"))
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn source_app_with_pin(
+    deadline: Instant,
+    pin: Option<WindowsDesktopPin<'_>>,
+) -> Result<PathBuf> {
     let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(home_dir);
     let program = std::env::var_os("ProgramFiles").map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"));
+    let standalone = [
+        local.join(r"Programs\Claude\Claude.exe"),
+        local.join(r"Programs\claude-desktop\Claude.exe"),
+        local.join(r"Claude\Claude.exe"),
+        program.join(r"Claude\Claude.exe"),
+    ];
+    let mom_install = pin.map(|pin| windows_pinned_install_dir(&local, pin.version).join("Claude.exe"));
+    prefer_standalone(mom_install.as_deref(), &standalone, pin, || {
+        find_default_windows_desktop(&local, &standalone, deadline)
+    })
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn prefer_standalone(
+    managed: Option<&Path>,
+    standalone: &[PathBuf],
+    pin: Option<WindowsDesktopPin<'_>>,
+    fallback: impl FnOnce() -> Result<PathBuf>,
+) -> Result<PathBuf> {
+    if let Some(pin) = pin {
+        if let Some(exe) = managed
+            .into_iter()
+            .chain(standalone.iter().map(PathBuf::as_path))
+            .find(|exe| pin.matches(exe))
+        {
+            return Ok(exe.to_path_buf());
+        }
+        if let Some(exe) = standalone.iter().find(|exe| exe.is_file()) {
+            return Ok(exe.clone());
+        }
+    }
+    fallback()
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn file_matches_sha256(path: &Path, expected: &str) -> bool {
+    let Ok(mut file) = fs::File::open(path) else { return false };
+    if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        return false;
+    }
+    let mut digest = Sha256::new();
+    std::io::copy(&mut file, &mut digest).is_ok() && format!("{:x}", digest.finalize()) == expected
+}
+
+#[cfg(target_os = "windows")]
+fn find_default_windows_desktop(
+    local: &Path,
+    standalone: &[PathBuf],
+    deadline: Instant,
+) -> Result<PathBuf> {
     let query = probe_output(Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; @(Get-AppxPackage -Name Claude; Get-AppxPackage -Name AnthropicPBC.Claude) | Select-Object Name,InstallLocation | ConvertTo-Json -Compress"]), deadline);
     if let Ok(output) = &query {
@@ -86,15 +168,13 @@ pub fn source_app(deadline: Instant) -> Result<PathBuf> {
             }
         }
     }
-    let candidates = [
+    let aliases = [
         local.join(r"Microsoft\WindowsApps\claude-desktop.exe"),
         local.join(r"Microsoft\WindowsApps\Claude_pzs8sxrjxfjjc\claude-desktop.exe"),
-        local.join(r"Programs\Claude\Claude.exe"),
-        local.join(r"Programs\claude-desktop\Claude.exe"),
-        local.join(r"Claude\Claude.exe"),
-        program.join(r"Claude\Claude.exe"),
     ];
-    if let Some(path) = candidates.into_iter().find(|path| path.is_file()) { return Ok(path); }
+    if let Some(path) = aliases.iter().chain(standalone).find(|path| path.is_file()) {
+        return Ok(path.clone());
+    }
     // 查询失败不是「未安装」，明确返回错误，避免把超时误报成未安装。
     let output = query?;
     ensure!(output.status.success(), "无法检测 Claude 安装位置，请检查 Windows 应用包服务后重试");
@@ -198,6 +278,50 @@ pub fn app_version(_app: &Path, _key: &str, _deadline: Instant) -> Result<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_desktop_prefers_standalone_and_requires_a_verified_managed_copy() {
+        let workspace = tempfile::tempdir().unwrap();
+        let standalone = workspace.path().join("Claude").join("Claude.exe");
+        let managed = workspace.path().join("Managed").join("Claude.exe");
+        let resources = managed.parent().unwrap().join("resources");
+        let archive = resources.join("app.asar");
+        let store = workspace.path().join("WindowsApps").join("Claude.exe");
+        let exe_bytes = b"standalone executable fixture";
+        let asar_bytes = b"standalone ASAR fixture";
+        let exe_sha256 = format!("{:x}", Sha256::digest(exe_bytes));
+        let asar_sha256 = format!("{:x}", Sha256::digest(asar_bytes));
+        let select = |pin_enabled: bool| {
+            prefer_standalone(
+                Some(&managed),
+                std::slice::from_ref(&standalone),
+                pin_enabled.then_some(WindowsDesktopPin {
+                    version: "5.11492.5",
+                    exe_sha256: &exe_sha256,
+                    asar_sha256: &asar_sha256,
+                }),
+                || Ok(store.clone()),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(select(true), store);
+        fs::create_dir_all(resources).unwrap();
+        fs::write(&managed, exe_bytes).unwrap();
+        assert_eq!(select(true), store);
+        fs::create_dir_all(standalone.parent().unwrap()).unwrap();
+        fs::write(&standalone, b"installed standalone executable").unwrap();
+        assert_eq!(select(true), standalone);
+        fs::write(&archive, asar_bytes).unwrap();
+        assert_eq!(select(true), managed);
+        assert_eq!(select(false), store);
+        fs::write(&archive, b"different ASAR").unwrap();
+        assert_eq!(select(true), standalone);
+        fs::write(&archive, asar_bytes).unwrap();
+        fs::write(&managed, b"different executable").unwrap();
+        fs::remove_file(&standalone).unwrap();
+        assert_eq!(select(true), store);
+    }
 
     #[test]
     fn claude_msix_namespace_discovery_and_classification_agree() {

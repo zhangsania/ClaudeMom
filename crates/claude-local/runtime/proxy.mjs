@@ -1616,7 +1616,7 @@ function allowOfficialAsset(req, url) {
       Number(req.headers["content-length"] || 0) !== 0 || /%(?:00|25|2f|5c)/i.test(url.pathname)) return false;
   const { hostname, pathname } = url;
   if (hostname === "downloads.claude.ai") {
-    return /^\/(?:claude-(?:code|ssh)-releases|vms\/linux|releases)\/[\w./-]+$/.test(pathname) ||
+    return /^\/(?:claude-(?:code|ssh)-releases|vms\/linux)\/[\w./-]+$/.test(pathname) ||
       /^\/model-catalog\/v1\/catalog\.json(?:\.raw-sig\.json)?$/.test(pathname);
   }
   if (hostname === "assets.claude.ai") {
@@ -2068,6 +2068,11 @@ function handle(req, res, hostHeader) {
 
   const hostName = url.hostname.toLowerCase();
   if (RESTRICT_EGRESS && (!OFFICIAL_HOSTS.test(hostName) || url.port)) return blockEgress(res);
+  if (RESTRICT_EGRESS && ["GET", "HEAD"].includes(req.method) &&
+      /^\/api\/desktop\/(?:[^/]+\/)*update\/?$/.test(url.pathname)) {
+    res.writeHead(204, { "cache-control": "no-store" });
+    return res.end();
+  }
   const isMainClaudeHost = /^(claude\.ai|www\.claude\.ai|claude\.com|www\.claude\.com)$/.test(hostName);
   if (MODE === "mock" && req.method === "GET" &&
       (isMainClaudeHost || hostName === "api.anthropic.com") &&

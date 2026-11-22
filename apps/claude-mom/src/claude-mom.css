@@ -284,4 +284,6 @@ button.cm-update-chip:hover { background: var(--cm-accent); color: #fff; }
 .cm-more .cm-form, .cm-more .cm-toggle-row { margin-top: 2px; }
 .cm-settings { gap: 12px; }
 .cm-editor { gap: 12px; }
-.cm-about { display: flex; align-items: center; gap: 10px; padding: 4px 2px; font-size: 12px; color: var(--cm-muted); }
+.cm-about, .cm-desktop-downloads { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 4px 2px; font-size: 12px; color: var(--cm-muted); }
+.cm-desktop-downloads .cm-link { display: inline-flex; align-items: center; gap: 4px; }
+.cm-desktop-downloads .cm-link svg { width: 13px; height: 13px; }

@@ -1,6 +1,9 @@
 # Claude Desktop pin and message forwarding
 
-Use Node.js 22 or newer from the ClaudeMom source checkout.
+In YClaude, the Windows x64 and Mac Apple Silicon downloads are at the bottom
+of Claude Settings. Windows uses a `.nupkg` package; macOS uses a ZIP containing
+`Claude.app`. For a download with size and SHA-256 verification, use Node.js 22
+or newer from the source checkout:
 
 ```text
 node scripts/download-desktop.mjs --list
@@ -13,6 +16,19 @@ archive. It checks the pinned size and SHA-256, does not fall back to another
 version, and does not install or run Claude Desktop. To add another version,
 verify its official package URL, size and SHA-256, then add an entry to
 `scripts/desktop-releases.json`.
+
+On Windows, YClaude looks first for a standalone copy that matches the pinned
+executable and core `resources/app.asar` hashes, then for other standalone
+installations. It can still use an existing Store installation if no standalone
+copy is found. On macOS it looks for `Claude.app` in `/Applications` and then
+`~/Applications`.
+
+When launching an older Windows x64 Desktop, ClaudeMom downloads only the
+pinned standalone release, verifies its length and SHA-256, and stages it
+in the current user's `Programs\ClaudeMom\Desktop-5.11492.5` directory.
+The existing installation remains intact. A matching or newer version
+does not trigger an automatic download or downgrade. Failed downloads and
+installs stop that launch and leave the existing copy intact.
 
 ClaudeMom keeps incoming `POST /v1/messages` bodies byte for byte by default.
 The gateway must accept the model ID supplied by the client. Set
@@ -31,21 +47,14 @@ downloads remain available. Third-party connectors, previews or other
 features may fail where they use the local proxy. This policy does not
 restrict programs that connect independently of ClaudeMom.
 
-Desktop's own updater can be disabled with its documented `disableAutoUpdates`
-policy. On Windows, ClaudeMom sets the current user's
-`HKCU\SOFTWARE\Policies\Claude\disableAutoUpdates` value to `REG_DWORD 1`
-before launching Desktop. This requires no administrator prompt. Desktop
-prefers the machine policy if its key contains any values. ClaudeMom leaves
-that key untouched and reports a launch error if it cannot confirm that the
-machine policy disables updates. This neither downgrades Desktop nor changes
-Microsoft Store updates.
-
-ClaudeMom also sets the equivalent gateway configuration in Desktop's third-party
-gateway mode. Administrators can apply the Windows policy directly from
-`scripts/desktop-policy` or deliver the equivalent Boolean in the macOS managed
-preferences domain `com.anthropic.claudefordesktop`. Merge into existing policy;
-do not replace unrelated managed preferences. ClaudeMom continues to use this
-fork's updater feed.
+ClaudeMom sets `DISABLE_AUTOUPDATER=1` in the launch environment for the
+embedded Code client. For full desktop mode, its local proxy answers Desktop
+update feed requests with no update and blocks Desktop application packages.
+Official UI assets and Code, SSH and VM component downloads remain available.
+Third-party gateway mode uses Desktop's launch configuration for its own updater.
+ClaudeMom does not write system update policies or require administrator access
+for these settings. They do not change Microsoft Store updates or ClaudeMom's
+own updater.
 
 For the Sub2API create-key dialog, stage the finished ClaudeMom installers at
 versioned URLs on the gateway's web origin. For example:

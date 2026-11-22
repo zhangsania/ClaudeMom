@@ -83,13 +83,13 @@ jobs:
           state=$(gh release view "$RELEASE_TAG" --json isDraft -q .isDraft 2>/dev/null || echo missing)
           case "$state" in
             missing)
-              gh release create "$RELEASE_TAG" --draft --verify-tag --title "ClaudeMom $RELEASE_TAG" --notes-file notes.md
+              gh release create "$RELEASE_TAG" --draft --verify-tag --title "YClaude $RELEASE_TAG" --notes-file notes.md
               echo "is_draft=true" >> "$GITHUB_OUTPUT"
               ;;
             true)
               # 事先手动建好的草稿：推 tag 时以 CHANGELOG 为准刷新说明；补跑时保留手改过的说明。
               if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-                gh release edit "$RELEASE_TAG" --tag "$RELEASE_TAG" --verify-tag --title "ClaudeMom $RELEASE_TAG" --notes-file notes.md
+                gh release edit "$RELEASE_TAG" --tag "$RELEASE_TAG" --verify-tag --title "YClaude $RELEASE_TAG" --notes-file notes.md
               fi
               echo "is_draft=true" >> "$GITHUB_OUTPUT"
               ;;
@@ -137,7 +137,7 @@ jobs:
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           # 工作区根目录的 target/（Cargo workspace 在仓库根）。
-          src="target/release/bundle/nsis/ClaudeMom_${version}_x64-setup.exe"
+          src="target/release/bundle/nsis/YClaude_${version}_x64-setup.exe"
           for file in "$src" "$src.sig"; do
             [ -s "$file" ] || { echo "缺少构建产物：$file" >&2; exit 1; }
           done
@@ -220,7 +220,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app="target/universal-apple-darwin/release/bundle/macos/ClaudeMom.app"
+          app="target/universal-apple-darwin/release/bundle/macos/YClaude.app"
           codesign --verify --deep --strict --verbose=2 "$app"
           # 能通过 Gatekeeper 评估说明已签名且公证过（ad-hoc 签名在这里会被拒）。
           spctl --assess --type execute --verbose=2 "$app"
@@ -231,16 +231,15 @@ jobs:
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           bundle="target/universal-apple-darwin/release/bundle"
-          dmg="$bundle/dmg/ClaudeMom_${version}_universal.dmg"
-          tarball="$bundle/macos/ClaudeMom.app.tar.gz"
+          dmg="$bundle/dmg/YClaude_${version}_universal.dmg"
+          tarball="$bundle/macos/YClaude.app.tar.gz"
           for file in "$dmg" "$tarball" "$tarball.sig"; do
             [ -s "$file" ] || { echo "缺少构建产物：$file" >&2; exit 1; }
           done
           mkdir -p dist
-          # 更新包沿用之前的附件名（ClaudeMom_universal.app.tar.gz）。
           cp "$dmg" dist/
-          cp "$tarball" dist/ClaudeMom_universal.app.tar.gz
-          cp "$tarball.sig" dist/ClaudeMom_universal.app.tar.gz.sig
+          cp "$tarball" dist/YClaude_universal.app.tar.gz
+          cp "$tarball.sig" dist/YClaude_universal.app.tar.gz.sig
           ls -l dist
 
       - name: 上传到 Release
@@ -272,7 +271,7 @@ jobs:
         run: |
           set -euo pipefail
           # 按 Release 上现有的全部附件重算，单平台补跑后也是完整清单。
-          gh release download "$RELEASE_TAG" --repo "$REPO" --pattern 'ClaudeMom*' --dir assets --clobber
+          gh release download "$RELEASE_TAG" --repo "$REPO" --pattern 'YClaude*' --dir assets --clobber
           ls -l assets
 
       - name: Verify assets and generate release metadata
@@ -281,7 +280,7 @@ jobs:
           set -euo pipefail
           gh release view "$RELEASE_TAG" --repo "$REPO" --json body,tagName > release.json
           node scripts/release-assets.mjs
-          (cd assets && sha256sum ClaudeMom* | sort -k2 > ../SHA256SUMS.txt)
+          (cd assets && sha256sum YClaude* | sort -k2 > ../SHA256SUMS.txt)
 
       - name: Upload release metadata
         shell: bash

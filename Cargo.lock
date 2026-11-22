@@ -518,6 +518,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-process",
@@ -525,6 +526,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "zip 9.5.1",
 ]
 
 [[package]]
@@ -5970,6 +5972,7 @@ checksum = "e3476fd497ac8af5b1ec7b51acab7bef380f7e8dd8e0487595bafd839417a302"
 dependencies = [
  "constant_time_eq 0.6.1",
  "crc32fast",
+ "flate2",
  "getrandom 0.4.3",
  "indexmap 2.14.2",
  "libc",

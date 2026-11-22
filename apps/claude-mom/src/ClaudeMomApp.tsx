@@ -7,6 +7,7 @@ import { checkForUpdate, currentVersion, installUpdate, type UpdateState } from 
 type Tab = "upstream" | "claude";
 type Notice = { text: string; tone: "ok" | "error" } | null;
 type ClaudeAction = "launch" | "stop" | "trust" | "untrust" | "trust_machine" | "prepare" | "sync_sessions";
+type DesktopDownload = "win32-x64" | "darwin-arm64";
 
 const errorText = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
@@ -211,7 +212,7 @@ export function ClaudeMomApp() {
     <div className="cm-shell">
       <aside className="cm-side">
         <div className="cm-side-head" data-tauri-drag-region>
-          <span className="cm-brand">ClaudeMom</span>
+          <span className="cm-brand">YClaude</span>
         </div>
         <div className="cm-side-label">上游</div>
         <nav className="cm-list" aria-label="上游">
@@ -327,6 +328,11 @@ export function ClaudeMomApp() {
               version={version}
               onCheckUpdate={() => void runUpdateCheck()}
               onInstallUpdate={() => void runInstall()}
+              onDesktopDownload={(platform) => {
+                void invoke("open_desktop_download", { platform }).catch((cause) => {
+                  say(`打开下载链接失败：${errorText(cause)}`, "error");
+                });
+              }}
             />
           )}
         </section>
@@ -580,7 +586,7 @@ function VoiceModel({ onReady }: { onReady: () => void }) {
   );
 }
 
-function ClaudeSettings({ status, busy, onConfigure, onAction, onVoice, update, version, onCheckUpdate, onInstallUpdate }: {
+function ClaudeSettings({ status, busy, onConfigure, onAction, onVoice, update, version, onCheckUpdate, onInstallUpdate, onDesktopDownload }: {
   status: ClaudeStatus | null;
   busy: string | null;
   onConfigure: (patch: Partial<ClaudeConfig>) => void;
@@ -590,6 +596,7 @@ function ClaudeSettings({ status, busy, onConfigure, onAction, onVoice, update, 
   version: string;
   onCheckUpdate: () => void;
   onInstallUpdate: () => void;
+  onDesktopDownload: (platform: DesktopDownload) => void;
 }) {
   if (!status) return <div className="cm-placeholder"><Loader2 className="cm-spin" /></div>;
   const config = status.config;
@@ -712,7 +719,7 @@ function ClaudeSettings({ status, busy, onConfigure, onAction, onVoice, update, 
       </details>
 
       <div className="cm-about">
-        <span>ClaudeMom {version || ""}{status.version ? ` · Claude ${status.version}` : ""}</span>
+        <span>YClaude {version || ""}{status.version ? ` · Claude ${status.version}` : ""}</span>
         {update.phase === "available" ? (
           <button className="cm-link" onClick={onInstallUpdate} type="button">更新到 {update.version}</button>
         ) : (
@@ -720,6 +727,15 @@ function ClaudeSettings({ status, busy, onConfigure, onAction, onVoice, update, 
             {update.phase === "checking" ? "检查中…" : update.phase === "latest" ? "已是最新" : "检查更新"}
           </button>
         )}
+      </div>
+      <div className="cm-desktop-downloads" role="group" aria-label="Claude Desktop 5.11492.5 独立安装包">
+        <span>Claude Desktop 5.11492.5</span>
+        <button className="cm-link" onClick={() => onDesktopDownload("win32-x64")} title="下载 Windows 官方独立包（.nupkg）" type="button">
+          <Download />Windows x64
+        </button>
+        <button className="cm-link" onClick={() => onDesktopDownload("darwin-arm64")} title="下载 Mac 官方独立包（.zip）" type="button">
+          <Download />Mac Apple Silicon
+        </button>
       </div>
     </div>
   );

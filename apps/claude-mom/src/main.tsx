@@ -13,7 +13,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 
   componentDidCatch(error: unknown, info: ErrorInfo) {
-    console.error("[ClaudeMom] 界面渲染失败", error, info.componentStack);
+    console.error("[YClaude] 界面渲染失败", error, info.componentStack);
   }
 
   render() {
@@ -21,7 +21,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
     if (!error) return this.props.children;
     return (
       <div className="cm-crash" role="alert">
-        <h1>ClaudeMom 界面加载失败</h1>
+        <h1>YClaude 界面加载失败</h1>
         <pre>{error.stack || error.message}</pre>
         <button className="cm-btn" onClick={() => window.location.reload()} type="button">重新加载</button>
       </div>

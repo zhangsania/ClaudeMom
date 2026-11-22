@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Result, bail};
@@ -58,9 +59,12 @@ pub trait Host: Send + Sync {
     /// 启动前准备并返回真正要用的上游（Codex++ 在这里起网关、写绑定）。
     fn prepare_upstream(&self, config: &ClaudeLocalSettings) -> Result<Upstream>;
 
-    /// Applies host-specific Desktop settings after launch preflight.
-    fn prepare_desktop_launch(&self) -> Result<()> {
-        Ok(())
+    /// Adds host-specific options to the Desktop process.
+    fn configure_desktop_launch(&self, _command: &mut Command) {}
+
+    #[cfg(target_os = "windows")]
+    fn windows_desktop_pin(&self) -> Option<crate::desktop::WindowsDesktopPin<'static>> {
+        None
     }
 
     fn restrict_desktop_egress(&self) -> bool {

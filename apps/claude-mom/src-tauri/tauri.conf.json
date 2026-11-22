@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ClaudeMom",
+  "productName": "YClaude",
   "version": "0.1.13",
   "identifier": "com.zhangsania.claudemom",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "ClaudeMom",
+        "title": "YClaude",
         "width": 860,
         "height": 600,
         "minWidth": 720,
@@ -43,6 +43,11 @@
     "macOS": {
       "minimumSystemVersion": "11.0",
       "signingIdentity": "-"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows/installer-hooks.nsh"
+      }
     },
     "createUpdaterArtifacts": true
   },

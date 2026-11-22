@@ -3,7 +3,9 @@
     "win32-x64": {
       "path": "/releases/win32/x64/AnthropicClaude-5.11492.5-full.nupkg",
       "bytes": 266514603,
-      "sha256": "2cad369fb923d83ef6b2f7bfd75f5cc224e9d8b5465fa14dac5ff5e39b0a7beb"
+      "sha256": "2cad369fb923d83ef6b2f7bfd75f5cc224e9d8b5465fa14dac5ff5e39b0a7beb",
+      "installedExeSha256": "fe1e6d5472ef1cd0c42b9e4d6af95ac071d395615d7292237cb5fcbdc52b6ada",
+      "appAsarSha256": "80c8c9716db54cedc93f64f4e4829a3532937e8bb5a4fb55049b5238c54ed9da"
     },
     "darwin-arm64": {
       "path": "/releases/darwin/arm64/5.11492.5/Claude-1403e2cf44abfb23809c8ae11238d5e9704a41c2.zip",

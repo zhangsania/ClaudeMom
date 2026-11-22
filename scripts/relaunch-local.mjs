@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appDir = path.join(root, "apps", "claude-mom");
-const bundle = path.join(root, "target", "release", "bundle", "macos", "ClaudeMom.app");
+const bundle = path.join(root, "target", "release", "bundle", "macos", "YClaude.app");
 const skipBuild = process.argv.includes("--skip-build");
 
 const run = (command, args, options = {}) => {

@@ -220,6 +220,12 @@ pub async fn claude_local_configure(config: claude_local::ClaudeLocalSettings) -
 
 #[tauri::command]
 pub async fn claude_local_action(action: String) -> CommandResult<Value> {
+    #[cfg(target_os = "windows")]
+    if action == "launch"
+        && let Err(error) = crate::desktop_update::prepare_launch().await
+    {
+        return failed(&format!("{error:#}"), json!({}));
+    }
     match tauri::async_runtime::spawn_blocking(move || claude_local::perform(&action)).await {
         Ok(Ok(result)) => ok(&result.message, serde_json::to_value(result.status).unwrap_or_default()),
         Ok(Err(error)) => {
@@ -228,6 +234,25 @@ pub async fn claude_local_action(action: String) -> CommandResult<Value> {
         }
         Err(error) => failed(&format!("操作失败：{error}"), json!({})),
     }
+}
+
+#[tauri::command]
+pub fn open_desktop_download(platform: String) -> Result<(), String> {
+    let open = || -> anyhow::Result<()> {
+        let url = crate::desktop_packages::download_url(&platform)?;
+        #[cfg(target_os = "windows")]
+        claude_local::winproc::open_in_default_browser(url.as_str())?;
+        #[cfg(target_os = "macos")]
+        anyhow::ensure!(
+            std::process::Command::new("/usr/bin/open").arg(url.as_str()).status()?.success(),
+            "无法打开系统默认浏览器"
+        );
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        anyhow::bail!("当前系统不支持此下载入口：{url}");
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        Ok(())
+    };
+    open().map_err(|error| format!("{error:#}"))
 }
 
 // ── 本地听写模型 ─────────────────────────────────────────────────────────

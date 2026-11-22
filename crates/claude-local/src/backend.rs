@@ -173,14 +173,19 @@ fn platform_supported() -> bool {
     cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
-/// Windows 上解析 Claude.exe 要走 PowerShell 查 Appx 包，冷启动很慢（status 每 3 秒
-/// 轮询），结果做进程内缓存：缓存路径已不存在且不是 MSIX 路径时才重新解析。
 #[cfg(target_os = "windows")]
 fn source_app() -> PathBuf {
+    windows_source_app(false)
+}
+
+/// 状态轮询复用路径；启动时重新确认 Store 注册，避免用到已卸载的包。
+#[cfg(target_os = "windows")]
+fn windows_source_app(refresh: bool) -> PathBuf {
     static CACHE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(None));
     let mut slot = cache.lock().unwrap_or_else(|error| error.into_inner());
-    if let Some(path) = slot.as_ref()
+    if !refresh
+        && let Some(path) = slot.as_ref()
         && (path.is_file() || crate::desktop::is_claude_msix_path(path))
     {
         return path.clone();
@@ -189,8 +194,9 @@ fn source_app() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| home_dir().join("AppData/Local"));
     let fallback = local.join(r"Programs\Claude\Claude.exe");
-    let resolved = crate::desktop::source_app(
+    let resolved = crate::desktop::source_app_with_pin(
         Instant::now() + Duration::from_secs(12),
+        host().windows_desktop_pin(),
     )
     .unwrap_or(fallback);
     *slot = Some(resolved.clone());
@@ -1177,6 +1183,16 @@ fn version(source: &Path) -> String {
         *slot = (source.to_path_buf(), modified, resolved.clone());
     }
     resolved
+}
+
+#[cfg(target_os = "windows")]
+pub fn windows_desktop_version_for_update() -> Result<Option<String>> {
+    let source = windows_source_app(true);
+    if !source_supported(&source) {
+        return Ok(None);
+    }
+    ensure!(claude_processes()?.is_empty(), "请先完全退出 Claude 再启动");
+    Ok(Some(version(&source)))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -2252,6 +2268,7 @@ fn launch_original(
             for (name, value) in &upstream.extra_env {
                 command.env(name, value);
             }
+            host().configure_desktop_launch(&mut command);
             spawn_detached(&mut command, source, "无法启动原版 Claude Desktop")?;
             return Ok(());
         }
@@ -2275,6 +2292,7 @@ fn launch_original(
         for (name, value) in &upstream.extra_env {
             command.env(name, value);
         }
+        host().configure_desktop_launch(&mut command);
     }
     spawn_detached(&mut command, source, "无法启动原版 Claude Desktop")?;
     Ok(())
@@ -2479,7 +2497,6 @@ pub fn perform(action: &str) -> Result<ClaudeLocalResult> {
         .map_err(|_| anyhow::anyhow!("另一项 Claude 本地服务操作正在进行"))?;
     let config = host().load_config()?;
     let root = root_dir();
-    let source = source_app();
     let mut sync_summary = String::new();
     let mut message = match action {
         "stop" => {
@@ -2548,6 +2565,10 @@ pub fn perform(action: &str) -> Result<ClaudeLocalResult> {
             }
         }
         "launch" => {
+            #[cfg(target_os = "windows")]
+            let source = windows_source_app(true);
+            #[cfg(not(target_os = "windows"))]
+            let source = source_app();
             ensure!(
                 source_supported(&source),
                 "未安装 Claude Desktop，请先安装官方应用"
@@ -2614,7 +2635,6 @@ pub fn perform(action: &str) -> Result<ClaudeLocalResult> {
                     prepare_dictation(&root, &node)?;
                 }
                 let upstream = host().prepare_upstream(&config)?;
-                host().prepare_desktop_launch()?;
                 sync_model_compact_windows(&root, &config, &upstream);
                 let port = start_backend(&root, &node, &config, &upstream, None)?;
                 if let Err(error) = launch_original(

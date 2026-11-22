@@ -823,6 +823,7 @@ test("ClaudeMom rejects third-party connections and unknown APIs before dialing 
       ["api.anthropic.com", "/v1/unknown.json", "GET"],
       ["auth.claude.com", "/api/unimplemented", "GET"],
       ["downloads.claude.ai", "/api/unimplemented.json", "GET"],
+      ["downloads.claude.ai", "/releases/win32/x64/AnthropicClaude-fixture-full.nupkg", "GET"],
       ["assets.claude.ai", "/api/unimplemented.woff2", "GET"],
       ["assets-proxy.anthropic.com", "/claude-ai/v2/api/unimplemented.js", "GET"],
       ["assets-proxy.anthropic.com", "/claude-ai/v2/assets/main.js", "POST"],
@@ -834,6 +835,16 @@ test("ClaudeMom rejects third-party connections and unknown APIs before dialing 
         host, method, ...(method === "POST" ? { body: { fixture: true } } : {}),
       });
       assert.equal(result.status, 403, `${method} ${host} ${pathname}`);
+    }
+
+    for (const [host, channel] of [
+      ["api.anthropic.com", "squirrel"],
+      ["releases.claude.com", "msix"],
+      ["claude.ai", "squirrel"],
+    ]) {
+      const result = await request(instance, `/api/desktop/win32/x64/${channel}/update?version=5.11492.5`, { host });
+      assert.equal(result.status, 204, host);
+      assert.equal(result.bytes.length, 0);
     }
 
     for (const [host, pathname] of [

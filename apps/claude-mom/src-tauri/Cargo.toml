@@ -32,5 +32,11 @@ uuid.workspace = true
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[target.'cfg(windows)'.dependencies]
+sha2.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util"] }
+zip = { version = "9.5.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
 [dev-dependencies]
 tempfile.workspace = true

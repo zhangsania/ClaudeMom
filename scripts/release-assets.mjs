@@ -9,9 +9,9 @@ if (!/^v\d+\.\d+\.\d+$/.test(tag) || tag !== release.tagName) {
 if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error("Missing release repository");
 
 const version = tag.slice(1);
-const windows = `ClaudeMom_${version}_x64-setup.exe`;
-const macInstaller = `ClaudeMom_${version}_universal.dmg`;
-const macUpdate = "ClaudeMom_universal.app.tar.gz";
+const windows = `YClaude_${version}_x64-setup.exe`;
+const macInstaller = `YClaude_${version}_universal.dmg`;
+const macUpdate = "YClaude_universal.app.tar.gz";
 const macFiles = [macInstaller, macUpdate, `${macUpdate}.sig`];
 const asset = (name) => path.join("assets", name);
 

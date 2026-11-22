@@ -292,7 +292,7 @@ pub fn cc_switch_profiles(db: &Path) -> Result<Vec<UpstreamProfile>> {
     if profiles.is_empty() && other_formats > 0 {
         bail!(
             "cc-switch 里的 {other_formats} 个 Claude 供应商都不是 Anthropic 格式（例如 OpenAI Chat），\
-             它们要经 cc-switch 自己的代理转换，ClaudeMom 没法直连。可以在 ClaudeMom 里手动添加 Anthropic 格式的地址和 Key。"
+             它们要经 cc-switch 自己的代理转换，YClaude 没法直连。可以在 YClaude 里手动添加 Anthropic 格式的地址和 Key。"
         );
     }
     Ok(profiles)

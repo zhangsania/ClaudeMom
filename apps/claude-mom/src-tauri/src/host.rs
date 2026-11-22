@@ -1,6 +1,7 @@
 //! ClaudeMom 给 claude-local 的宿主实现：状态目录、设置文件、上游（选中的那组 Base URL + Key）、听写服务。
 
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
@@ -114,9 +115,13 @@ impl Host for ClaudeMomHost {
         self.active_upstream()
     }
 
-    #[cfg(windows)]
-    fn prepare_desktop_launch(&self) -> Result<()> {
-        claude_local::desktop_update_policy::disable()
+    fn configure_desktop_launch(&self, command: &mut Command) {
+        command.env("DISABLE_AUTOUPDATER", "1");
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_desktop_pin(&self) -> Option<claude_local::desktop::WindowsDesktopPin<'static>> {
+        crate::desktop_update::pinned_release().map(|release| release.pin)
     }
 
     fn restrict_desktop_egress(&self) -> bool {

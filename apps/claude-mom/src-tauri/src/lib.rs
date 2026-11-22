@@ -1,6 +1,9 @@
 //! ClaudeMom：用原版 Claude Desktop 的完整功能模式，直连自己配置的上游（Base URL + Key）。
 
 mod commands;
+mod desktop_packages;
+#[cfg(target_os = "windows")]
+mod desktop_update;
 mod host;
 mod log;
 mod upstreams;
@@ -61,6 +64,7 @@ pub fn run() {
             commands::claude_local_status,
             commands::claude_local_configure,
             commands::claude_local_action,
+            commands::open_desktop_download,
             commands::claude_mom_load,
             commands::claude_mom_save_profile,
             commands::claude_mom_delete_profile,
@@ -108,12 +112,12 @@ fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 }
 
 fn install_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, TRAY_SHOW, "显示 ClaudeMom", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, TRAY_SHOW, "显示 YClaude", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, TRAY_QUIT, "退出（同时停止本地服务）", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
     let mut builder = TrayIconBuilder::with_id("claude_mom_tray")
         .menu(&menu)
-        .tooltip("ClaudeMom")
+        .tooltip("YClaude")
         .show_menu_on_left_click(!cfg!(windows))
         .on_menu_event(|app, event| match event.id.as_ref() {
             TRAY_SHOW => show_main_window(app),
