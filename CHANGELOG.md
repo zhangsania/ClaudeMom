@@ -1,5 +1,13 @@
 # 更新日志
 
+## 0.1.14 - 2026-11-22
+
+- 应用更名为 YClaude。Claude 设置底部新增 Windows x64 和 Mac Apple Silicon 的 Desktop `5.11492.5` 官方独立包下载入口。
+- 修复 Windows 上禁更策略目录只读时无法启动的问题。YClaude 启动时不写注册表，给内置 Code 设置 `DISABLE_AUTOUPDATER=1`；完整功能模式的本地代理会阻止 Desktop 更新检查和应用更新包。
+- Windows 优先查找校验通过的 Desktop `5.11492.5` 独立版，其次是其他已安装的独立版。没有独立版时仍支持现有 Store 版。点启动时重新查找 Desktop，避免使用已卸载的旧路径。
+- 从 YClaude 启动低于 `5.11492.5` 的 Windows 版时，只下载并校验该版本的官方独立包，并保留原安装；达到目标版本后会跳过下载，高于目标版本时不会自动降级。
+- 官方界面资源和必要组件下载、YClaude 自身更新保持可用。Microsoft Store 自身的更新设置不变。
+
 ## 0.1.13 - 2026-11-22
 
 - Windows 上，从 ClaudeMom 启动 Claude Desktop 时自动关闭 Desktop 自带更新，无需管理员授权。已有机器策略时以机器策略为准；ClaudeMom 自己的更新保持开启。
