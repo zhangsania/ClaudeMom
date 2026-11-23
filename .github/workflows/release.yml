@@ -120,6 +120,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # 见 ci.yml 同名步骤：缓存恢复出的 sherpa-onnx 预编译库目录是空的，缺库文件时让构建脚本重新下载。
+      - name: sherpa-onnx 预编译库
+        shell: bash
+        run: |
+          if ! compgen -G "target/sherpa-onnx-prebuilt/*/lib/*sherpa-onnx-c-api*" > /dev/null; then
+            rm -rf target/sherpa-onnx-prebuilt target/*/build/sherpa-onnx-sys* target/*/.fingerprint/sherpa-onnx-sys* \
+              target/*/*/build/sherpa-onnx-sys* target/*/*/.fingerprint/sherpa-onnx-sys*
+          fi
+
       - name: 安装前端依赖
         working-directory: apps/claude-mom
         run: npm ci
@@ -173,6 +182,15 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
+
+      # 见 ci.yml 同名步骤：缓存恢复出的 sherpa-onnx 预编译库目录是空的，缺库文件时让构建脚本重新下载。
+      - name: sherpa-onnx 预编译库
+        shell: bash
+        run: |
+          if ! compgen -G "target/sherpa-onnx-prebuilt/*/lib/*sherpa-onnx-c-api*" > /dev/null; then
+            rm -rf target/sherpa-onnx-prebuilt target/*/build/sherpa-onnx-sys* target/*/.fingerprint/sherpa-onnx-sys* \
+              target/*/*/build/sherpa-onnx-sys* target/*/*/.fingerprint/sherpa-onnx-sys*
+          fi
 
       - name: 安装前端依赖
         working-directory: apps/claude-mom

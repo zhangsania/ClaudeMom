@@ -28,7 +28,7 @@ static OPERATION: Mutex<()> = Mutex::new(());
 include!(concat!(env!("OUT_DIR"), "/templates.rs"));
 
 fn all_assets() -> impl Iterator<Item = &'static (&'static str, &'static [u8])> {
-    ASSETS.iter().chain(TEMPLATE_ASSETS.iter())
+    ASSETS.iter().chain(TEMPLATE_ASSETS.iter()).chain(crate::extensions::BUILTIN.iter())
 }
 
 /// 内嵌的录制版本：build id 与该版本前端的构建时间（秒，取自页面外壳的 data-build-timestamp），新的在前。
@@ -79,12 +79,28 @@ const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("../runtime/official-assets.mjs"),
     ),
     (
+        "extensions.mjs",
+        include_bytes!("../runtime/extensions.mjs"),
+    ),
+    (
         "conversation-service.mjs",
         include_bytes!("../runtime/conversation-service.mjs"),
     ),
     (
         "rpc.mjs",
         include_bytes!("../runtime/rpc.mjs"),
+    ),
+    (
+        "plugins.mjs",
+        include_bytes!("../runtime/plugins.mjs"),
+    ),
+    (
+        "connectors.mjs",
+        include_bytes!("../runtime/connectors.mjs"),
+    ),
+    (
+        "projects.mjs",
+        include_bytes!("../runtime/projects.mjs"),
     ),
     (
         "demo/index.html",
@@ -162,7 +178,7 @@ fn runtime_slot() -> &'static Mutex<Option<BackendRuntime>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
-fn root_dir() -> PathBuf {
+pub(crate) fn root_dir() -> PathBuf {
     host().state_dir().join("claude-local")
 }
 
@@ -605,7 +621,8 @@ fn is_managed_egress_config_library(library: &Path) -> bool {
         .is_some_and(|meta| meta[EGRESS_MANAGED_MARKER].as_bool() == Some(true))
 }
 
-/// CoworkVMService（LocalSystem）不继承 Claude 的 `--proxy-server`。启动前
+/// Cowork 虚拟机不继承 Claude 的 `--proxy-server`：Windows 的 CoworkVMService 以 LocalSystem 运行，
+/// macOS 的虚拟机用系统代理设置，请求带着本地账号的令牌直连官方，报 401 Invalid bearer token。启动前
 /// 在 Claude-3p/configLibrary 写入只含 `egressProxyUrl` 的临时配置，让 Claude
 /// 把本地代理传给 VM。已有用户 configLibrary 时不覆盖，交给正常 1p 切换流程处理。
 fn apply_egress_proxy_config(sets: &[ProfileSet], port: u16) -> Result<()> {
@@ -917,7 +934,25 @@ fn install_assets(root: &Path) -> Result<()> {
             let _ = if path.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
         }
     }
+    // 内置扩展目录只放随程序打包的那几个：下架的、多出来的文件一并清掉。
+    let builtin_dir = root.join(crate::extensions::BUILTIN_DIR);
+    let shipped: std::collections::HashSet<PathBuf> =
+        crate::extensions::BUILTIN.iter().map(|(name, _)| root.join(name)).collect();
+    remove_unlisted(&builtin_dir, &shipped);
     Ok(())
+}
+
+/// 删掉 `dir` 下不在 `keep` 里的文件，以及删空了的文件夹。
+fn remove_unlisted(dir: &Path, keep: &std::collections::HashSet<PathBuf>) {
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            remove_unlisted(&path, keep);
+            let _ = fs::remove_dir(&path);
+        } else if !keep.contains(&path) {
+            let _ = fs::remove_file(&path);
+        }
+    }
 }
 
 // 这些探测命令只输出短状态；所有等待均有上限，避免系统工具卡住管理器。
@@ -1261,23 +1296,31 @@ fn ca_trusted_machine(root: &Path) -> bool {
     .is_ok_and(|(success, _)| success)
 }
 
-fn ca_trusted(root: &Path) -> bool {
+/// `cowork`：还要求 Cowork 虚拟机也能信任这枚 CA（只有 macOS 用到）。Claude 只把钥匙串里
+/// 按基本 X.509 策略受信的证书装进虚拟机，旧版只按 SSL 策略信任的条目传不进去。
+/// Windows 的虚拟机读本机根证书，另见 `ca_trusted_machine`。
+fn ca_trusted(root: &Path, cowork: bool) -> bool {
     if !ca_ready(root) {
         return false;
     }
     #[cfg(target_os = "macos")]
     {
-        return probe(
-            Command::new("/usr/bin/security")
-                .args(["verify-cert", "-q", "-L", "-c"])
-                .arg(root.join("ca/server.crt"))
-                .args(["-p", "ssl", "-n", "claude.ai"]),
-            PROBE_TIMEOUT,
-        )
-        .is_ok_and(|(success, _)| success);
+        let verified = |cert: &str, policy: &[&str]| {
+            probe(
+                Command::new("/usr/bin/security")
+                    .args(["verify-cert", "-q", "-L", "-c"])
+                    .arg(root.join(cert))
+                    .args(policy),
+                PROBE_TIMEOUT,
+            )
+            .is_ok_and(|(success, _)| success)
+        };
+        return verified("ca/server.crt", &["-p", "ssl", "-n", "claude.ai"])
+            && (!cowork || verified("ca/ca.pem", &["-p", "basic"]));
     }
     #[cfg(windows)]
     {
+        let _ = cowork;
         return ca_trusted_user(root);
     }
     #[cfg(not(any(target_os = "macos", windows)))]
@@ -1391,13 +1434,14 @@ fn trust_ca(root: &Path) -> Result<()> {
         platform_supported(),
         "本地证书信任目前仅支持 macOS 和 Windows"
     );
-    if ca_trusted(root) {
+    if ca_trusted(root, true) {
         return Ok(());
     }
+    // basic：Cowork 虚拟机要的，见 `ca_trusted`。
     #[cfg(target_os = "macos")]
     checked(
         Command::new("/usr/bin/security")
-            .args(["add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-k"])
+            .args(["add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-p", "basic", "-k"])
             .arg(home_dir().join("Library/Keychains/login.keychain-db"))
             .arg(root.join("ca/ca.pem")),
         Duration::from_secs(120),
@@ -1412,7 +1456,7 @@ fn trust_ca(root: &Path) -> Result<()> {
         Duration::from_secs(120),
         "本地证书尚未信任，请在 Windows 弹出的安全警告中点击“是”后重试",
     )?;
-    ensure!(ca_trusted(root), "本地证书信任未生效，请重新检查系统授权");
+    ensure!(ca_trusted(root, true), "本地证书信任未生效，请重新检查系统授权");
     Ok(())
 }
 
@@ -1457,7 +1501,7 @@ fn untrust_ca(root: &Path) -> Result<()> {
             .stderr(Stdio::null())
             .status();
         ensure!(
-            !ca_trusted(root),
+            !ca_trusted(root, false),
             "本地证书仍在信任列表中，请在“钥匙串访问”里删除 Codex++ Local CA"
         );
     }
@@ -1772,7 +1816,7 @@ pub fn status() -> Result<ClaudeLocalStatus> {
         Err(error) => (Vec::new(), Vec::new(), None, Some(format!("{error:#}"))),
     };
     let ready = ca_ready(&root);
-    let trusted = ready && ca_trusted(&root);
+    let trusted = ready && ca_trusted(&root, config.cowork);
     #[cfg(windows)]
     let machine_trusted = ready && ca_trusted_machine(&root);
     #[cfg(not(windows))]
@@ -1993,6 +2037,9 @@ fn start_backend(
         .env("CLAUDE_LOCAL_READY_FILE", &ready_file)
         .env("CLAUDE_LOCAL_INSTANCE_ID", &instance)
         .env("CLAUDE_LOCAL_LOCALIZATION", flag(config.localization))
+        .env("CLAUDE_LOCAL_BUILTIN_EXTENSIONS_DIR", root.join(crate::extensions::BUILTIN_DIR))
+        .env("CLAUDE_LOCAL_EXTENSIONS_DIR", root.join("extensions"))
+        .env("CLAUDE_LOCAL_EXTENSIONS_STATE", root.join("extensions.json"))
         .env("CLAUDE_LOCAL_VOICE_INPUT", flag(config.voice_input))
         .env("CLAUDE_LOCAL_COMPUTER_USE", flag(config.computer_use))
         .env("CLAUDE_LOCAL_BACKGROUND_MODE", flag(config.background_mode))
@@ -2290,12 +2337,12 @@ fn launch_original(
         // 完整功能模式直接用真实 Claude profile（无 --user-data-dir），启动前切到 1p 并记录回滚信息。
         let sets = profile_sets();
         apply_real_profile_one_p(&sets, root)?;
-        #[cfg(windows)]
         if cowork {
             apply_egress_proxy_config(&sets, port)?;
+        } else {
+            // 上次带 Cowork 启动留下的配置指着旧端口。
+            remove_managed_egress_config_libraries(&sets)?;
         }
-        #[cfg(not(windows))]
-        let _ = cowork;
         apply_code_dir(&mut command, root, share_home, &home_dir().join(".claude"))?;
         command
             .args(local_launch_args(root, port, localization))
@@ -2642,7 +2689,7 @@ pub fn perform(action: &str) -> Result<ClaudeLocalResult> {
                 prepare_ca(&root)?;
                 // 第三方模式下 Claude 不经代理、不解密 HTTPS，证书用不上。
                 ensure!(
-                    config.three_p_mode || ca_trusted(&root),
+                    config.three_p_mode || ca_trusted(&root, config.cowork),
                     "请先点击“信任本地证书”，完成系统授权后再启动"
                 );
                 let node = node_runtime().context("未找到支持 fetch 和 WebSocket 的 Node.js")?;

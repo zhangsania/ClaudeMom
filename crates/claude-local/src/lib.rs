@@ -6,6 +6,7 @@
 mod backend;
 pub mod cli_import;
 pub mod desktop;
+pub mod extensions;
 pub mod fsutil;
 mod host;
 pub mod node;

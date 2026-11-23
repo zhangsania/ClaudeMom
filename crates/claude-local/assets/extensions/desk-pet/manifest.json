@@ -1,0 +1,8 @@
+{
+  "id": "desk-pet",
+  "name": "桌宠小橘",
+  "version": "1.0.0",
+  "author": "ClaudeMom",
+  "description": "一只小橘猫在 Claude 窗口底部走来走去：点它说话，拖着走，发消息时跳一下，不理它会睡着。Alt+Shift+P 显示 / 隐藏。",
+  "scripts": ["desk-pet.js"]
+}

@@ -1,5 +1,6 @@
 /* ClaudeMom：独立小工具的样式，不依赖 Codex++ 的 styles.css / cursor-ui.css。
-   紧凑的桌面程序布局：侧栏（上游列表）+ 工具栏（Claude 状态与启动）+ 页签内容 + 状态栏。 */
+   紧凑的桌面程序布局：侧栏（页面导航）+ 工具栏（Claude 状态与启动）+ 页面内容 + 状态栏。
+   上游页里再分一栏上游列表；Claude 设置和扩展是全局的，整宽显示。 */
 
 :root {
   color-scheme: light dark;
@@ -20,7 +21,8 @@
   --cm-danger: #c0392b;
   --cm-info: #3b6ea8;
   --cm-radius: 6px;
-  --cm-side-width: 232px;
+  --cm-side-width: 196px;
+  --cm-sublist-width: 208px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -68,7 +70,7 @@ svg { width: 14px; height: 14px; flex: none; }
 }
 .cm-side-head { height: 46px; display: flex; align-items: center; padding: 0 14px; }
 .cm-mac .cm-side-head { padding-left: 82px; }
-.cm-brand { font-weight: 650; letter-spacing: 0.01em; }
+.cm-brand { font-weight: 650; letter-spacing: 0.01em; white-space: nowrap; }
 .cm-brand::before {
   content: "";
   display: inline-block;
@@ -78,7 +80,25 @@ svg { width: 14px; height: 14px; flex: none; }
   background: var(--cm-accent);
   vertical-align: 1px;
 }
-.cm-side-label { padding: 6px 14px 4px; font-size: 11px; font-weight: 600; color: var(--cm-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.cm-nav { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; }
+.cm-nav-item {
+  display: flex; align-items: center; gap: 9px;
+  height: 32px; padding: 0 10px;
+  border: 0; border-radius: var(--cm-radius);
+  background: transparent; color: var(--cm-muted); text-align: left; cursor: default;
+}
+.cm-nav-item svg { width: 15px; height: 15px; }
+.cm-nav-item:hover { background: rgba(127, 110, 90, 0.08); color: var(--cm-text); }
+.cm-nav-item[aria-current="page"] { background: var(--cm-accent-soft); color: var(--cm-accent); font-weight: 550; }
+.cm-side-foot { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 14px 12px; font-size: 11.5px; color: var(--cm-muted); }
+.cm-side-foot .cm-link { font-size: 11.5px; margin-top: 2px; }
+.cm-side-foot .cm-update-chip { margin: 2px 0 0; }
+
+/* ── 上游页：列表 + 编辑器 ─────────────── */
+.cm-split { flex: 1; min-height: 0; display: flex; }
+.cm-sublist { width: var(--cm-sublist-width); flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--cm-line); }
+.cm-sublist-head { display: flex; flex-direction: column; padding: 12px 14px 6px; }
+.cm-sublist-head > :first-child { font-weight: 600; }
 .cm-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
 .cm-item {
   display: flex; align-items: center; gap: 9px;
@@ -171,15 +191,12 @@ svg { width: 14px; height: 14px; flex: none; }
 .cm-banner[data-tone="info"] { background: rgba(59, 110, 168, 0.08); }
 .cm-banner[data-tone="info"]::before { background: var(--cm-info); }
 
-.cm-tabs { display: flex; gap: 2px; padding: 8px 16px 0; border-bottom: 1px solid var(--cm-line); }
-.cm-tabs button {
-  height: 30px; padding: 0 12px; margin-bottom: -1px;
-  border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--cm-muted);
-}
-.cm-tabs button[aria-selected="true"] { color: var(--cm-text); border-bottom-color: var(--cm-accent); font-weight: 550; }
-
-.cm-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px 20px; user-select: text; }
+.cm-body { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 16px 20px 20px; user-select: text; }
 .cm-placeholder { height: 100%; display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--cm-muted); }
+.cm-page-head { display: flex; align-items: center; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--cm-line); }
+.cm-page-head h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 2px; font-size: 16px; font-weight: 600; }
+.cm-page-head h2 .cm-tag { font-weight: 400; }
+.cm-page-head p { margin: 0; }
 
 /* ── 表单 ─────────────────────────────── */
 .cm-editor { max-width: 640px; display: flex; flex-direction: column; gap: 14px; }
@@ -286,3 +303,20 @@ svg { width: 14px; height: 14px; flex: none; }
 .cm-desktop-downloads .cm-link { display: inline-flex; align-items: center; gap: 4px; }
 .cm-desktop-downloads .cm-link { font-size: 11.5px; }
 .cm-desktop-downloads .cm-link svg { width: 13px; height: 13px; }
+
+/* ── 扩展 ─────────────────── */
+.cm-settings > p { margin: 0; }
+.cm-ext-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cm-ext-desc { margin-top: 3px; line-height: 1.5; }
+.cm-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 7px; background: rgba(127, 110, 90, 0.1); }
+.cm-seg button {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 12px; border: 0; border-radius: 5px; background: transparent; color: var(--cm-muted);
+}
+.cm-seg button[aria-selected="true"] { background: var(--cm-panel); color: var(--cm-text); font-weight: 550; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
+.cm-seg-count { font-size: 11px; font-weight: 400; color: var(--cm-muted); }
+.cm-seg-count[data-tone="accent"] { color: var(--cm-accent); }
+.cm-search { width: 200px; height: 28px; padding: 0 8px; border: 1px solid var(--cm-line-strong); border-radius: var(--cm-radius); background: var(--cm-panel); }
+.cm-search:focus { outline: none; border-color: var(--cm-accent); box-shadow: 0 0 0 3px var(--cm-accent-soft); }
+.cm-star { width: 11px; height: 11px; margin-right: 2px; vertical-align: -1px; }
+.cm-market-loading { height: 120px; }

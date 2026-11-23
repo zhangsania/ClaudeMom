@@ -24,6 +24,7 @@ Claude 安装包。代理、证书、缓存和会话数据由 Codex++ 放在独�
 | `CLAUDE_LOCAL_STATE_FILE` | 会话和通知设置文件；原子写入、权限为 `0600` |
 | `CLAUDE_LOCAL_READY_FILE` / `_INSTANCE_ID` | 本次启动的就绪回执和实例标识 |
 | `CLAUDE_LOCAL_LOCALIZATION` / `_VOICE_INPUT` / `_COMPUTER_USE` / `_BACKGROUND_MODE` / `_FORCE_BACKGROUND_MODE` | 各能力的独立开关，`0` 关闭、`1` 开启；最后一个无视后台模式的 macOS 版本上限 |
+| `CLAUDE_LOCAL_BUILTIN_EXTENSIONS_DIR` / `_EXTENSIONS_DIR` / `_EXTENSIONS_STATE` | 页面扩展：内置与用户的扩展目录（`<id>/manifest.json`），和记录启用了哪些的状态文件（`{"enabled":[...]}`）。启用中的扩展按清单以 `/__codex_plus/ext/<id>/<文件>` 插进页面外壳、官方脚本之前，每次请求现读 |
 | `CLAUDE_LOCAL_COWORK` | Cowork 总开关（GrowthBook `yukon_silver`），默认开，`0` 时按录制模板里 Claude 自己的值 |
 | `CLAUDE_LOCAL_COWORK_PROMPT_FILE` | 覆盖 Cowork 系统提示词的文件；不设时从本机 `app.asar` 读，读不到用内置兜底文案 |
 | `CLAUDE_LOCAL_TEMPLATE` | 录制版用哪个录制版本（`mock/<build>/` 的目录名，即前端 build id）；不设或已下架时用最新的（按页面外壳的 `data-build-timestamp`） |

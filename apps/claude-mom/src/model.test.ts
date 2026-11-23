@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { claudeState, emptyProfile, formatWindow, normalizeModels, profileProblem, setupSteps, templateLabel, type ClaudeStatus } from "./model.ts";
+import { claudeState, compareVersions, emptyProfile, formatWindow, normalizeModels, profileProblem, setupSteps, templateLabel, type ClaudeStatus } from "./model.ts";
 
 const status = (patch: Partial<ClaudeStatus> = {}): ClaudeStatus => ({
   supported: true, sourceApp: "", version: "1.0", claudeRunning: false, running: false, connected: false,
@@ -59,4 +59,14 @@ test("recorded template versions are labelled by build date and id", () => {
   const label = templateLabel({ build: "a4ced7f85b", builtAt: 1794603257 });
   assert.match(label, /^2026-11-1[34] · a4ced7f85b$/);
   assert.equal(templateLabel({ build: "x1", builtAt: null }), "x1");
+});
+
+test("扩展版本按语义化版本比较", () => {
+  const ordered = ["0.9.10", "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0", "1.0.1", "1.10.0", "2.0.0"];
+  for (let index = 1; index < ordered.length; index++) {
+    assert.equal(compareVersions(ordered[index], ordered[index - 1]), 1, `${ordered[index]} > ${ordered[index - 1]}`);
+    assert.equal(compareVersions(ordered[index - 1], ordered[index]), -1);
+  }
+  assert.equal(compareVersions("1.0.0+build.5", "1.0.0"), 0);
+  assert.equal(compareVersions("abc", "1.0.0"), 0);
 });

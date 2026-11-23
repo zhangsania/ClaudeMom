@@ -11,7 +11,7 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
-import { gzipSync, gunzipSync } from "node:zlib";
+import { crc32, gzipSync, gunzipSync } from "node:zlib";
 import { startupAssets } from "./scripts/patch-dictation-start.mjs";
 import { facadeFixture, recorderFixture } from "./scripts/fixtures/dictation-start.mjs";
 
@@ -36,6 +36,182 @@ let dictationAssetPath;
 let dictationUpgrade;
 let dictationFrame;
 const streamFixtureSize = 4 * 1024 * 1024;
+
+// 两个假的远程 MCP 服务器：mcp.demo.example 不用登录；mcp.auth.example 要 OAuth（授权服务器是 auth.example）。
+const mcpFixture = { calls: [], registrations: [], tokenRequests: [], challenge: "", validTokens: new Set(["token-1"]), refreshes: true };
+
+async function connectorFixture(req, res) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const raw = Buffer.concat(chunks).toString("utf8");
+  const host = req.headers.host;
+  const reply = (status, value, headers = {}) => {
+    res.writeHead(status, { "content-type": "application/json", ...headers });
+    res.end(value === undefined ? undefined : JSON.stringify(value));
+  };
+  if (host === "auth.example") {
+    if (req.url === "/.well-known/oauth-authorization-server") {
+      return reply(200, {
+        issuer: "https://auth.example", authorization_endpoint: "https://auth.example/authorize",
+        token_endpoint: "https://auth.example/token", registration_endpoint: "https://auth.example/register",
+      });
+    }
+    if (req.method === "POST" && req.url === "/register") {
+      mcpFixture.registrations.push(JSON.parse(raw));
+      return reply(201, { client_id: `client-${mcpFixture.registrations.length}` });
+    }
+    if (req.method === "POST" && req.url === "/token") {
+      const form = Object.fromEntries(new URLSearchParams(raw));
+      mcpFixture.tokenRequests.push(form);
+      if (form.grant_type === "refresh_token" && form.refresh_token === "refresh-1" && mcpFixture.refreshes) {
+        mcpFixture.validTokens.add("token-2");
+        return reply(200, { access_token: "token-2", expires_in: 3600 });
+      }
+      const challenge = crypto.createHash("sha256").update(form.code_verifier ?? "").digest("base64url");
+      if (form.grant_type === "authorization_code" && form.code === "code-1" && challenge === mcpFixture.challenge) {
+        return reply(200, { access_token: "token-1", refresh_token: "refresh-1", expires_in: 3600 });
+      }
+      return reply(400, { error: "invalid_grant" });
+    }
+    return reply(404, { error: "not found" });
+  }
+  if (host === "mcp.auth.example" && req.url === "/.well-known/oauth-protected-resource/mcp") {
+    return reply(200, { resource: "https://mcp.auth.example/mcp", authorization_servers: ["https://auth.example"], scopes_supported: ["read", "write"] });
+  }
+  if (req.method !== "POST" || req.url !== "/mcp") return reply(404, { error: "not found" });
+  if (host === "mcp.auth.example" && !mcpFixture.validTokens.has(String(req.headers.authorization).replace("Bearer ", ""))) {
+    return reply(401, { error: "unauthorized" }, {
+      "www-authenticate": 'Bearer resource_metadata="https://mcp.auth.example/.well-known/oauth-protected-resource/mcp"',
+    });
+  }
+  const message = JSON.parse(raw);
+  const session = `session-${host}`;
+  if (message.method === "initialize") {
+    return reply(200, {
+      jsonrpc: "2.0", id: message.id,
+      result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" }, instructions: "Use the echo tool." },
+    }, { "mcp-session-id": session });
+  }
+  if (req.headers["mcp-session-id"] !== session) return reply(404, { error: "unknown session" });
+  if (message.method === "notifications/initialized") return reply(202);
+  if (message.method === "tools/list") {
+    // 用 SSE 回，而且不结束连接：客户端拿到答案就该自己收手。
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    return res.write(`event: message\ndata: ${JSON.stringify({
+      jsonrpc: "2.0", id: message.id,
+      result: { tools: [{ name: "echo", description: "Echoes", inputSchema: { type: "object", properties: { text: { type: "string" } } }, annotations: { title: "Echo" } }] },
+    })}\n\n`);
+  }
+  if (message.method === "tools/call") {
+    mcpFixture.calls.push({ host, authorization: req.headers.authorization, params: message.params });
+    return reply(200, {
+      jsonrpc: "2.0", id: message.id,
+      result: { content: [{ type: "text", text: `echo: ${message.params.arguments.text}` }], isError: false, structuredContent: { ok: true } },
+    });
+  }
+  reply(200, { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } });
+}
+
+/** 读「已连接的连接器」事件流：事件名 → 各次的 data。 */
+async function connectorEvents() {
+  const stream = await requestText("claude.ai", "/api/organizations/local/mcp/v2/bootstrap", { accept: "text/event-stream" });
+  assert.equal(stream.status, 200);
+  assert.match(stream.headers["content-type"], /text\/event-stream/);
+  const events = {};
+  for (const block of stream.body.split("\n\n").filter(Boolean)) {
+    const [, name, data] = /^event: (\S+)\ndata: (.*)$/s.exec(block);
+    (events[name] ??= []).push(JSON.parse(data));
+  }
+  return events;
+}
+
+// 公开插件目录里的一条记录：插件在仓库的子目录里，带一个 skill 和一个会运行代码的钩子。
+const pluginCommit = "0123456789abcdef0123456789abcdef01234567";
+const pluginFixture = {
+  id: "plugin_fixture01",
+  name: "Demo Tools",
+  manifest_name: "demo-manifest",
+  summary: "Demo plugin",
+  release: { version: "1.2.3" },
+  added_time: "2026-10-01T00:00:00Z",
+  updated_time: "2026-11-01T00:00:00Z",
+  source: {
+    type: "directory",
+    marketplace_slug: "anthropic-plugin-directory",
+    repository: { url: "https://github.com/acme/tools", reviewed_commit: pluginCommit, path: "plugins/demo" },
+  },
+  components: [
+    { type: "skill", name: "demo-skill", description: "Does the demo", access: { type: "stays_inside_claude" } },
+    { type: "hook", name: "SessionStart", access: { type: "runs_on_your_computer" } },
+  ],
+  installation: { state: "signed_out", actions: { sign_in: true } },
+};
+const pluginFiles = {
+  "README.md": "repo readme",
+  "plugins/demo/.claude-plugin/plugin.json": '{"name":"demo"}',
+  "plugins/demo/skills/demo-skill/SKILL.md": "# demo skill",
+  "plugins/other/notes.txt": "another plugin",
+};
+
+/** 不压缩的 zip：GitHub 源码包的样子，所有条目在 `<仓库>-<提交号>/` 下。 */
+function storedZip(files) {
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  for (const [name, content] of Object.entries(files)) {
+    const data = Buffer.from(content);
+    const label = Buffer.from(name);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt32LE(crc32(data), 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(label.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt32LE(crc32(data), 16);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(label.length, 28);
+    central.writeUInt32LE(offset, 42);
+    locals.push(local, label, data);
+    centrals.push(central, label);
+    offset += 30 + label.length + data.length;
+  }
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(centrals.length / 2, 8);
+  end.writeUInt16LE(centrals.length / 2, 10);
+  end.writeUInt32LE(centrals.reduce((size, part) => size + part.length, 0), 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, ...centrals, end]);
+}
+
+/** 读回不压缩的 zip：条目名 → 内容，按本地文件头找数据并核对校验和。 */
+function storedZipEntries(zip) {
+  const end = zip.length - 22;
+  assert.equal(zip.readUInt32LE(end), 0x06054b50);
+  const entries = {};
+  let at = zip.readUInt32LE(end + 16);
+  for (let index = 0; index < zip.readUInt16LE(end + 10); index++) {
+    assert.equal(zip.readUInt32LE(at), 0x02014b50);
+    const size = zip.readUInt32LE(at + 20);
+    const nameLength = zip.readUInt16LE(at + 28);
+    const name = zip.toString("utf8", at + 46, at + 46 + nameLength);
+    const localAt = zip.readUInt32LE(at + 42);
+    assert.equal(zip.readUInt32LE(localAt), 0x04034b50);
+    assert.equal(zip.toString("utf8", localAt + 30, localAt + 30 + zip.readUInt16LE(localAt + 26)), name);
+    const dataAt = localAt + 30 + zip.readUInt16LE(localAt + 26) + zip.readUInt16LE(localAt + 28);
+    const data = zip.subarray(dataAt, dataAt + size);
+    assert.equal(crc32(data), zip.readUInt32LE(at + 16));
+    entries[name] = data.toString("utf8");
+    at += 46 + nameLength + zip.readUInt16LE(at + 30) + zip.readUInt16LE(at + 32);
+  }
+  return entries;
+}
 let streamFixture;
 let streamFixtureReady;
 
@@ -63,10 +239,10 @@ async function response(req, body) {
   return result;
 }
 
-async function request(pathname, { host, body, method = body === undefined ? "GET" : "POST", beforeBody } = {}) {
-  const raw = body === undefined ? undefined : JSON.stringify(body);
+async function request(pathname, { host, body, type = "application/json", method = body === undefined ? "GET" : "POST", beforeBody } = {}) {
+  const raw = body === undefined ? undefined : Buffer.isBuffer(body) ? body : JSON.stringify(body);
   const headers = raw === undefined ? {} : {
-    "content-type": "application/json",
+    "content-type": type,
     "content-length": Buffer.byteLength(raw),
   };
   const send = async (req) => {
@@ -343,6 +519,7 @@ before(async () => {
   const gatewayPort = await listen(gateway);
   // 假上游：记录代理转发过来的 host 头与路径
   upstreamFixture = http.createServer((req, res) => {
+    if (["mcp.demo.example", "mcp.auth.example", "auth.example"].includes(req.headers.host)) return connectorFixture(req, res);
     upstreamRequests.push({ host: req.headers.host, url: req.url });
     if (req.url === "/upstream-failure-fixture") return req.socket.destroy();
     if (req.url.startsWith("/stream-fixture/")) {
@@ -364,6 +541,33 @@ before(async () => {
       });
       return res.end(cdnAssetBody);
     }
+    if (req.url === `/acme/tools/zip/${pluginCommit}`) {
+      res.writeHead(200, { "content-type": "application/zip" });
+      return res.end(storedZip(Object.fromEntries(
+        Object.entries(pluginFiles).map(([name, content]) => [`tools-${pluginCommit}/${name}`, content]),
+      )));
+    }
+    if (req.url === `/api/directory/plugins/${pluginFixture.id}`) {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify(pluginFixture));
+    }
+    if (req.url.startsWith("/api/directory/plugins/")) {
+      res.writeHead(404, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "not found" }));
+    }
+    if (req.url.startsWith("/api/directory/plugins?") && decodeURIComponent(req.url).includes("manifest_name == 'demo-manifest'")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ data: [pluginFixture], next_page: null, facets: {}, omitted: [] }));
+    }
+    if (req.url.startsWith("/api/directory/plugins")) {
+      if (req.url.includes("refuse=1")) {
+        res.writeHead(403, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "region" }));
+      }
+      // 真接口自己带 CORS 头；这里故意不带，代理必须补上。
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ data: [{ id: "plugin_fixture" }], next_page: null, facets: {}, omitted: [] }));
+    }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, host: req.headers.host, url: req.url }));
   });
@@ -380,6 +584,11 @@ before(async () => {
       CLAUDE_LOCAL_UPSTREAM_MAP: JSON.stringify({
         "downloads.claude.ai": `http://127.0.0.1:${upstreamFixturePort}`,
         "assets-proxy.anthropic.com": `http://127.0.0.1:${upstreamFixturePort}`,
+        "api.anthropic.com": `http://127.0.0.1:${upstreamFixturePort}`,
+        "codeload.github.com": `http://127.0.0.1:${upstreamFixturePort}`,
+        "mcp.demo.example": `http://127.0.0.1:${upstreamFixturePort}`,
+        "mcp.auth.example": `http://127.0.0.1:${upstreamFixturePort}`,
+        "auth.example": `http://127.0.0.1:${upstreamFixturePort}`,
       }),
       CLAUDE_LOCAL_CACHE_DIR: dictationCacheDir,
       CLAUDE_LOCAL_COWORK_PROMPT_FILE: coworkPromptFile,
@@ -421,6 +630,7 @@ after(async () => {
   if (dictationStateDir) {
     fs.unlinkSync(path.join(dictationStateDir, "dictation-helper.json"));
     fs.unlinkSync(path.join(dictationStateDir, "conversation-state.json"));
+    fs.rmSync(path.join(dictationStateDir, "project-files"), { recursive: true, force: true });
     fs.rmdirSync(dictationStateDir);
   }
   if (dictationCacheDir) {
@@ -546,6 +756,103 @@ test("Cowork plugin metadata is a dictionary rather than a paginated list", asyn
   assert.deepEqual(result.body, {});
 });
 
+test("memory settings and memory edits answer in the shapes the settings page validates", async () => {
+  const settings = "/api/organizations/local/memory/settings";
+  const off = await request(settings, { host: "claude.ai", body: { enabled_melange: false, enabled_saffron: false } });
+  assert.equal(off.status, 200);
+  assert.equal(off.body.memory_mode, "off");
+  assert.equal(off.body.enabled_saffron, false);
+  assert.equal((await request(settings, { host: "claude.ai" })).body.memory_mode, "off");
+  const classic = await request(settings, { host: "claude.ai", body: { enabled_melange: false, enabled_saffron: true } });
+  assert.equal(classic.body.memory_mode, "classic");
+
+  const memory = await request("/api/organizations/local/memory?project_uuid=p1", { host: "claude.ai" });
+  assert.equal(memory.status, 200);
+  assert.equal(typeof memory.body.memory, "string");
+  assert.ok("controls" in memory.body && "updated_at" in memory.body);
+
+  const saved = await request("/api/organizations/local/memory/controls", {
+    host: "claude.ai", method: "PUT", body: { controls: ["喜欢简短的回答"], base_controls_version: null },
+  });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body.controls, ["喜欢简短的回答"]);
+  assert.equal(typeof saved.body.controls_version, "string");
+  assert.ok(!Number.isNaN(Date.parse(saved.body.updated_at)));
+  assert.deepEqual((await request("/api/organizations/local/memory", { host: "claude.ai" })).body.controls, ["喜欢简短的回答"]);
+
+  const reset = await request("/api/organizations/local/memory/reset", { host: "claude.ai", body: {} });
+  assert.equal(reset.body.controls, null);
+});
+
+test("project conversation lists are pages rather than empty objects", async () => {
+  const result = await request("/api/organizations/local/projects/p1/conversations_v2?limit=30&offset=0", { host: "claude.ai" });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.data, []);
+  assert.equal(result.body.pagination.has_more, false);
+});
+
+/** 一个文件字段的 multipart/form-data 请求体。 */
+function formFile(filename, type, data) {
+  const boundary = `----fixture${crypto.randomUUID()}`;
+  return {
+    type: `multipart/form-data; boundary=${boundary}`,
+    body: Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${type}\r\n\r\n`),
+      Buffer.from(data),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]),
+  };
+}
+
+test("document conversion extracts text from Office files and plain text, and refuses what it cannot read", async () => {
+  const convert = (filename, type, data) => request("/api/organizations/local/convert_document", { host: "claude.ai", ...formFile(filename, type, data) });
+  const docx = storedZip({
+    "word/document.xml": '<w:document><w:body><w:p><w:r><w:t>第一段 &amp; more</w:t></w:r></w:p><w:p><w:r><w:t>Second</w:t></w:r><w:r><w:tab/><w:t>tab</w:t></w:r></w:p></w:body></w:document>',
+  });
+  const converted = await convert("报告.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", docx);
+  assert.equal(converted.status, 200);
+  assert.equal(converted.body.file_name, "报告.docx");
+  assert.equal(converted.body.extracted_content, "第一段 & more\nSecond\ttab");
+
+  const xlsx = storedZip({
+    "xl/sharedStrings.xml": "<sst><si><t>名称</t></si><si><t>数量</t></si></sst>",
+    "xl/worksheets/sheet1.xml": '<worksheet><sheetData><row><c t="s"><v>0</v></c><c t="s"><v>1</v></c></row><row><c t="inlineStr"><is><t>苹果</t></is></c><c><v>3</v></c></row></sheetData></worksheet>',
+  });
+  assert.equal((await convert("表.xlsx", "application/octet-stream", xlsx)).body.extracted_content, "## Sheet 1\n名称\t数量\n苹果\t3");
+
+  const pptx = storedZip({ "ppt/slides/slide1.xml": "<p:sld><a:p><a:r><a:t>标题</a:t></a:r></a:p></p:sld>" });
+  assert.equal((await convert("演示.pptx", "application/octet-stream", pptx)).body.extracted_content, "## Slide 1\n标题");
+
+  assert.equal((await convert("notes.md", "text/markdown", "# 标题\n正文")).body.extracted_content, "# 标题\n正文");
+  const pdf = await convert("scan.pdf", "application/pdf", "%PDF-1.7\n...");
+  assert.equal(pdf.status, 422);
+  assert.equal(pdf.body.error.details.error_code, "extraction_failed");
+});
+
+test("project uploads keep images and PDFs as files and refuse other files", async () => {
+  const org = "/api/organizations/local";
+  const project = (await request(`${org}/projects`, { host: "claude.ai", body: { name: "Uploads" } })).body;
+  const upload = (filename, type, data) => request(`${org}/projects/${project.uuid}/upload`, { host: "claude.ai", ...formFile(filename, type, data) });
+
+  const pdf = await upload("spec.pdf", "application/pdf", "%PDF-1.4\n1 0 obj << /Type /Page >> endobj\n2 0 obj << /Type /Page >> endobj\n3 0 obj << /Type /Pages >> endobj");
+  assert.equal(pdf.status, 200);
+  assert.equal(pdf.body.file_kind, "document");
+  assert.equal(pdf.body.document_asset.page_count, 2);
+  assert.equal(pdf.body.document_asset.url, `/api/local/files/${pdf.body.file_uuid}/document`);
+  // 客户端把 Office 文档送去转文本、纯文本自己读，别的文件传到这里一律不收。
+  const text = await upload("notes.txt", "text/plain", "plain knowledge");
+  assert.equal(text.status, 400);
+  assert.equal(text.body.error.details.error_code, "invalid_file_type");
+
+  const files = (await request(`${org}/projects/${project.uuid}/files`, { host: "claude.ai" })).body;
+  assert.deepEqual(files.map((file) => file.file_name), ["spec.pdf"]);
+  assert.deepEqual((await request(`${org}/projects/${project.uuid}/docs`, { host: "claude.ai" })).body, []);
+
+  const removed = await request(`${org}/projects/${project.uuid}/files/delete_many`, { host: "claude.ai", body: { file_uuids: [pdf.body.file_uuid] } });
+  assert.equal(removed.status, 200);
+  assert.deepEqual((await request(`${org}/projects/${project.uuid}/files`, { host: "claude.ai" })).body, []);
+});
+
 test("local mock accounts do not request identity verification", async () => {
   const result = await request("/api/organizations/local/kyc_status", { host: "claude.ai" });
   assert.equal(result.status, 200);
@@ -563,7 +870,8 @@ test("Desktop receives the native Computer Use rollout without enabling permissi
   assert.equal(result.body.features["40173473"].value, true);
   assert.equal(result.body.features["40173473"].on, true);
   assert.equal(result.body.features["40173473"].off, false);
-  assert.deepEqual(Object.keys(result.body.features).sort(), ["1291166712", "40173473"]);
+  // 2340532315：账号插件的同步；600735300：连接器登录在应用内完成。
+  assert.deepEqual(Object.keys(result.body.features).sort(), ["1291166712", "2340532315", "40173473", "600735300"]);
   assert.equal(result.body.chicagoEnabled, undefined);
 });
 
@@ -882,12 +1190,234 @@ test("plugin installed-check returns its checked-list contract", async () => {
 test("unknown remote plugin details return the API not-found contract", async () => {
   for (const pathname of [
     "/api/organizations/local/plugins/example-plugin",
+    "/api/organizations/local/plugins/plugin_unknown01",
     "/api/organizations/local/plugins/by-name/example-plugin?marketplace_name=official",
+    "/api/organizations/local/plugins/by-name/example-plugin?marketplace_name=anthropic-plugin-directory",
   ]) {
     const result = await request(pathname, { host: "claude.ai" });
     assert.equal(result.status, 404);
     assert.equal(result.body.error.details.error_code, "plugin_not_found");
   }
+});
+
+test("plugins install from the public directory: detail, enable, download, listed, remove", async () => {
+  const org = "/api/organizations/local";
+  const get = (pathname) => request(`${org}/${pathname}`, { host: "claude.ai" });
+
+  // 详情页先在默认市场里按名字找到目录，再带着它的 id 按名字读插件。
+  const marketplace = (await get("marketplaces/list-default-marketplaces")).body.marketplaces
+    .find((entry) => entry.name === "anthropic-plugin-directory");
+  assert.equal(marketplace.is_default, true);
+  const byName = await get(`plugins/by-name/demo-manifest?marketplace_name=${marketplace.name}&marketplace_id=${marketplace.id}&partition_by=organization`);
+  assert.equal(byName.status, 200);
+  assert.equal(byName.body.id, pluginFixture.id);
+  assert.equal(byName.body.name, "demo-manifest", "前端要求 name 等于地址里的名字");
+  assert.equal(byName.body.marketplace_id, marketplace.id, "前端要求 marketplace_id 等于市场 id");
+  assert.deepEqual(byName.body.mcp_servers, {});
+  assert.equal(byName.body.display_name, "Demo Tools");
+  assert.equal(byName.body.enabled, false);
+  assert.equal(byName.body.installation_preference, "available");
+  assert.equal(byName.body.reach, "privileged", "带钩子的插件安装前要提示会在电脑上运行代码");
+  assert.deepEqual(byName.body.skills, [{ name: "demo-skill", description: "Does the demo", user_invocable: true }]);
+  assert.deepEqual(byName.body.hooks, [{ event: "SessionStart", matchers: [] }]);
+  assert.equal((await get(`plugins/${pluginFixture.id}`)).body.id, pluginFixture.id);
+  assert.deepEqual((await get(`plugins/${pluginFixture.id}/scan-status`)).body, { content_scan: null });
+  assert.equal((await get(`plugins/${pluginFixture.id}/versions?page_size=100`)).status, 404);
+
+  const enabledList = () => get("plugins/list-plugins?enabled_only=true&compact=true&limit=100&offset=0");
+  assert.deepEqual((await enabledList()).body, { plugins: [], has_more: false });
+
+  // 「添加」：网页 PUT enabled，桌面端随后读这三个接口来下载和挂载。
+  const enabled = await request(`${org}/plugins/${pluginFixture.id}/enabled`, {
+    host: "claude.ai", method: "PUT", body: { enabled: true, install_source: "browse" },
+  });
+  assert.equal(enabled.status, 200);
+  assert.equal(enabled.body.enabled, true);
+  assert.ok(Array.isArray(enabled.body.skills));
+  const [row] = (await enabledList()).body.plugins;
+  assert.equal(row.id, pluginFixture.id);
+  assert.equal(row.name, "demo-manifest");
+  assert.equal(row.marketplace_name, "anthropic-plugin-directory", "缺了市场名，桌面端会丢掉这一行");
+  assert.equal(row.updated_at, pluginFixture.updated_time);
+  assert.deepEqual((await get("plugins/enabled-state")).body.preferences, [{
+    plugin_name: "demo-manifest", marketplace_id: marketplace.id, marketplace_name: marketplace.name, enabled: true,
+  }]);
+  // 组织强制安装的那种查法始终是空的，否则桌面端会把它当成管理员下发的插件。
+  assert.deepEqual((await get("plugins/list-plugins?installation_preference=auto_install&installation_preference=required&limit=100&offset=0")).body.plugins, []);
+  const mine = (await get("library/mine?kind=plugin&limit=1000")).body.items;
+  assert.equal(mine[0].plugin.backend_id, pluginFixture.id);
+  assert.equal(mine[0].viewer.installed.enabled, true);
+  const yours = (await get(`directory/plugins?filter=${encodeURIComponent("installation.state in ['enabled', 'disabled']")}&limit=1000`)).body.data;
+  assert.equal(yours[0].id, pluginFixture.id);
+  assert.equal(yours[0].installation.state, "enabled");
+
+  // 安装包：仓库在审核过的提交上的源码，只留插件所在的子目录。
+  const zip = await requestText("claude.ai", `${org}/plugins/${pluginFixture.id}/download`);
+  assert.equal(zip.status, 200);
+  assert.deepEqual(storedZipEntries(zip.bytes), {
+    ".claude-plugin/plugin.json": '{"name":"demo"}',
+    "skills/demo-skill/SKILL.md": "# demo skill",
+  });
+  assert.equal(upstreamRequests.some((seen) => seen.host === "codeload.github.com" && seen.url === `/acme/tools/zip/${pluginCommit}`), true);
+
+  const removed = await request(`${org}/plugins/${pluginFixture.id}/enabled`, {
+    host: "claude.ai", method: "PUT", body: { enabled: false, install_source: "remove" },
+  });
+  assert.equal(removed.body.enabled, false);
+  assert.deepEqual((await enabledList()).body.plugins, []);
+  assert.deepEqual((await get("plugins/enabled-state")).body.preferences, []);
+});
+
+test("a connector that needs no sign-in is added, shows as connected with its tools, runs them, and is removed", async () => {
+  const mcp = "/api/organizations/local/mcp";
+  const before = await connectorEvents();
+  assert.deepEqual(before.server_list[0].servers, []);
+  assert.ok(before.first_pass_complete && before.completed, "空名单也要明确结束，否则页面一直等");
+
+  const created = await request(`${mcp}/remote_servers`, {
+    host: "claude.ai",
+    body: { name: "Demo", url: "https://mcp.demo.example/mcp", mcp_directory_server_uuid: "69f3a300-cc60-48c4-b237-dfac56530dbf", user_confirmed: true },
+  });
+  assert.equal(created.status, 200);
+  const { uuid } = created.body;
+  assert.match(uuid, /^[0-9a-f-]{36}$/);
+  assert.equal(created.body.name, "Demo");
+  assert.equal(created.body.url, "https://mcp.demo.example/mcp");
+  assert.equal(created.body.mcp_directory_server_uuid, "69f3a300-cc60-48c4-b237-dfac56530dbf");
+  assert.match(created.body.created_at, /Z$/);
+  // 同一个地址再加一次：给回原来那条。
+  const again = await request(`${mcp}/remote_servers`, { host: "claude.ai", body: { name: "Demo", url: "https://mcp.demo.example/mcp" } });
+  assert.equal(again.body.uuid, uuid);
+  assert.equal(again.body.existing, true);
+  assert.equal((await request(`${mcp}/remote_servers`, { host: "claude.ai", body: { name: "Plain", url: "http://mcp.demo.example/mcp" } })).status, 400);
+
+  // 页面加完连接器总会「连接」一次：不用登录的直接算连上。
+  const started = await request(`${mcp}/start-auth/${uuid}?response_format=json&desktop_finish=claude`, { host: "claude.ai" });
+  assert.deepEqual(started.body, { connected: true });
+
+  const events = await connectorEvents();
+  assert.deepEqual(events.server_list[0].servers, [{
+    uuid, name: "Demo", url: "https://mcp.demo.example/mcp", directoryEntryUuid: "69f3a300-cc60-48c4-b237-dfac56530dbf",
+  }]);
+  const [base] = events.server_base;
+  assert.equal(base.uuid, uuid);
+  assert.equal(base.connected, true);
+  assert.equal(base.authStatus, "not_required");
+  assert.equal(base.usedAuthentication, false);
+  assert.equal(base.instructions, "Use the echo tool.");
+  assert.deepEqual(events.tools, [{
+    server_uuid: uuid,
+    tools: [{
+      name: "echo", description: "Echoes", inputSchema: { type: "object", properties: { text: { type: "string" } } },
+      annotations: { title: "Echo" }, displayName: "Echo", enabled_key: `${uuid}:echo`, always_approved_key: `${uuid}:echo:always`,
+    }],
+  }]);
+  assert.deepEqual(Object.keys(events), ["server_list", "server_base", "tools", "first_pass_complete", "completed"]);
+
+  const listed = (await request(`${mcp}/remote_servers_with_connection`, { host: "claude.ai" })).body;
+  assert.equal(listed[0].uuid, uuid);
+  assert.equal(listed[0].connection_state, "connected");
+  assert.equal(listed[0].connection_auth_type, null);
+  assert.equal((await request(`${mcp}/remote_servers/${uuid}`, { host: "claude.ai" })).body.uuid, uuid);
+  assert.equal((await request(`${mcp}/remote_servers`, { host: "claude.ai" })).body.length, 1);
+
+  // 会话里调用工具：桌面端主进程发的就是这个请求。
+  const called = await request(`${mcp}/servers/${uuid}/tools/call`, { host: "claude.ai", body: { tool_name: "echo", arguments: { text: "hi" } } });
+  assert.equal(called.status, 200);
+  assert.deepEqual(called.body, { content: [{ type: "text", text: "echo: hi" }], is_error: false, structured_content: { ok: true } });
+  assert.deepEqual(mcpFixture.calls.at(-1), { host: "mcp.demo.example", authorization: undefined, params: { name: "echo", arguments: { text: "hi" } } });
+
+  const gone = await request(`${mcp}/remote_servers/${uuid}`, { host: "claude.ai", method: "DELETE" });
+  assert.equal(gone.status, 200);
+  const after = await connectorEvents();
+  assert.deepEqual(after.server_list[0].servers, []);
+  assert.deepEqual(after.server_list[0].deleted_server_uuids, [uuid]);
+  const missing = await request(`${mcp}/servers/${uuid}/tools/call`, { host: "claude.ai", body: { tool_name: "echo", arguments: {} } });
+  assert.equal(missing.status, 404);
+  assert.equal(missing.body.error.details.error_code, "mcp_connector_removed");
+});
+
+test("a connector that needs sign-in goes through OAuth in the browser and hands the result back to the app", async () => {
+  const mcp = "/api/organizations/local/mcp";
+  const { uuid } = (await request(`${mcp}/remote_servers`, { host: "claude.ai", body: { name: "Private", url: "https://mcp.auth.example/mcp" } })).body;
+
+  const waiting = await connectorEvents();
+  assert.equal(waiting.server_base[0].connected, false);
+  assert.equal(waiting.server_base[0].authStatus, "auth_required");
+  assert.equal(waiting.tools, undefined);
+
+  // 桌面端没报 claude:// 能力（或走的是整页跳转）时，登录结果交不回应用：明确拒绝，不给会跳去真 claude.ai 的地址。
+  assert.equal((await request(`${mcp}/start-auth/${uuid}?response_format=json`, { host: "claude.ai" })).body.error.details.error_code, "mcp_sign_in_unavailable");
+  assert.equal((await request(`${mcp}/start-auth/${uuid}?browser_handoff=1&desktop_finish=claude`, { host: "claude.ai" })).status, 400);
+
+  const started = (await request(`${mcp}/start-auth/${uuid}?response_format=json&desktop_finish=claude`, { host: "claude.ai" })).body;
+  assert.equal(started.finish_in_app, true);
+  assert.match(started.state, /^[A-Za-z0-9_-]{16,256}$/);
+  const authorize = new URL(started.auth_url);
+  assert.equal(authorize.origin + authorize.pathname, "https://auth.example/authorize");
+  const redirect = `http://127.0.0.1:${proxyPort}/mcp-oauth-callback`;
+  assert.deepEqual(Object.fromEntries(authorize.searchParams), {
+    response_type: "code", client_id: "client-1", redirect_uri: redirect, state: started.state,
+    code_challenge: authorize.searchParams.get("code_challenge"), code_challenge_method: "S256",
+    resource: "https://mcp.auth.example/mcp", scope: "read write",
+  });
+  assert.deepEqual(mcpFixture.registrations.at(-1).redirect_uris, [redirect]);
+  assert.equal(mcpFixture.registrations.at(-1).token_endpoint_auth_method, "none");
+  mcpFixture.challenge = authorize.searchParams.get("code_challenge");
+
+  // 浏览器登录完跳回本机：没有本地凭据，state 不对的不认。
+  const page = (query) => fetch(`http://127.0.0.1:${proxyPort}/mcp-oauth-callback?${query}`);
+  assert.equal((await page("code=code-1&state=wrong")).status, 400);
+  const landed = await page(`code=code-1&state=${started.state}`);
+  assert.equal(landed.status, 200);
+  const link = /href="(claude:\/\/[^"]+)"/.exec(await landed.text())[1].replaceAll("&amp;", "&");
+  const handed = new URL(link);
+  assert.equal(handed.host + handed.pathname, `claude.ai/mcp-auth-callback/${uuid}`);
+  assert.equal(handed.searchParams.get("step"), "finish");
+  assert.equal(handed.searchParams.get("state"), started.state);
+  assert.equal(handed.searchParams.has("code"), false, "授权码不能出现在交回应用的链接里");
+  const ticket = handed.searchParams.get("ticket");
+  assert.match(ticket, /^[A-Za-z0-9_-]{16,256}$/);
+  assert.deepEqual(mcpFixture.tokenRequests.at(-1), {
+    grant_type: "authorization_code", code: "code-1", redirect_uri: redirect,
+    code_verifier: mcpFixture.tokenRequests.at(-1).code_verifier, client_id: "client-1", resource: "https://mcp.auth.example/mcp",
+  });
+
+  const claim = (value) => request(`/api/mcp/auth_callback?state=${started.state}&ticket=${value}&response_format=json`, { host: "claude.ai" });
+  assert.deepEqual((await claim("wrong-ticket-wrong-ticket")).body, { success: false, error_code: "mcp_auth_state_invalid" });
+  assert.deepEqual((await claim(ticket)).body, { success: true });
+  assert.deepEqual((await claim(ticket)).body, { replayed: true });
+
+  const signedIn = await connectorEvents();
+  const base = signedIn.server_base.find((entry) => entry.uuid === uuid);
+  assert.equal(base.connected, true);
+  assert.equal(base.authStatus, "authenticated");
+  assert.equal(base.usedAuthentication, true);
+  assert.equal(signedIn.tools.find((entry) => entry.server_uuid === uuid).tools[0].name, "echo");
+  assert.equal((await request(`${mcp}/remote_servers/${uuid}`, { host: "claude.ai" })).body.is_authenticated, true);
+
+  const call = () => request(`${mcp}/servers/${uuid}/tools/call`, { host: "claude.ai", body: { tool_name: "echo", arguments: { text: "secret" } } });
+  assert.equal((await call()).body.content[0].text, "echo: secret");
+  assert.equal(mcpFixture.calls.at(-1).authorization, "Bearer token-1");
+  // 令牌过期：用刷新令牌换一个新的，这次调用照常完成。
+  mcpFixture.validTokens.delete("token-1");
+  assert.equal((await call()).body.content[0].text, "echo: secret");
+  assert.equal(mcpFixture.calls.at(-1).authorization, "Bearer token-2");
+  assert.equal(mcpFixture.tokenRequests.at(-1).grant_type, "refresh_token");
+  // 刷新也不行了：调用失败成一条模型看得懂的工具结果，状态变成要重新登录。
+  mcpFixture.validTokens.clear();
+  mcpFixture.refreshes = false;
+  const expired = (await call()).body;
+  assert.equal(expired.is_error, true);
+  assert.match(expired.content[0].text, /sign in again/);
+  assert.equal((await connectorEvents()).server_base.find((entry) => entry.uuid === uuid).authStatus, "token_invalid");
+
+  // 断开：令牌丢掉，显示为未连接。
+  assert.equal((await request(`${mcp}/logout/${uuid}`, { host: "claude.ai", method: "POST" })).status, 200);
+  const loggedOut = await connectorEvents();
+  assert.equal(loggedOut.server_base.find((entry) => entry.uuid === uuid).authStatus, "auth_required");
+  assert.equal((await request(`${mcp}/remote_servers/${uuid}`, { host: "claude.ai" })).body.is_authenticated, false);
+  await request(`${mcp}/remote_servers/${uuid}`, { host: "claude.ai", method: "DELETE" });
 });
 
 test("frame type catalog and plugin registry return validated list shapes", async () => {
@@ -910,7 +1440,10 @@ for (const host of [undefined, "api.anthropic.com", "claude.ai"]) {
 
 for (const host of [undefined, "api.anthropic.com", "claude.ai"]) {
   test(`plugin directory returns an array page over ${host || "direct HTTP"}`, async () => {
-    for (const pathname of ["/api/directory/plugins", "/api/organizations/local/directory/plugins"]) {
+    // api.anthropic.com 上的公开目录转给真接口，另有用例。
+    const paths = ["/api/organizations/local/directory/plugins"];
+    if (host !== "api.anthropic.com") paths.push("/api/directory/plugins");
+    for (const pathname of paths) {
       const result = await request(pathname, { host });
       assert.equal(result.status, 200);
       assert.deepEqual(result.body.data, []);
@@ -920,6 +1453,23 @@ for (const host of [undefined, "api.anthropic.com", "claude.ai"]) {
     }
   });
 }
+
+test("the public plugin directory comes from Anthropic and is readable cross-origin from claude.ai", async () => {
+  const before = upstreamRequests.length;
+  const listed = await request("/api/directory/plugins?limit=24&order_by=trending", { host: "api.anthropic.com" });
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.body.data, [{ id: "plugin_fixture" }]);
+  assert.equal(listed.headers["access-control-allow-origin"], "*");
+  assert.deepEqual(upstreamRequests.slice(before), [
+    { host: "api.anthropic.com", url: "/api/directory/plugins?limit=24&order_by=trending" },
+  ]);
+
+  // 真接口拒绝（地区限制等）时回空目录，同样要带 CORS 头：缺了页面读不到，整页报「无法加载插件」。
+  const refused = await request("/api/directory/plugins?refuse=1", { host: "api.anthropic.com" });
+  assert.equal(refused.status, 200);
+  assert.deepEqual(refused.body, { data: [], next_page: null, facets: {}, omitted: [] });
+  assert.equal(refused.headers["access-control-allow-origin"], "*");
+});
 
 for (const host of [undefined, "api.anthropic.com", "claude.ai"]) {
   test(`DXT extension lists return entries and total over ${host || "direct HTTP"}`, async () => {

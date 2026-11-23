@@ -1,0 +1,8 @@
+{
+  "id": "wide-chat",
+  "name": "加宽对话区",
+  "version": "1.0.0",
+  "author": "ClaudeMom",
+  "description": "把聊天页和 Code / Cowork 的对话列、输入框加宽。Alt+Shift+W 在加宽和原样之间切换。",
+  "scripts": ["wide-chat.js"]
+}

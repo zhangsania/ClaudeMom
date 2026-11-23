@@ -24,6 +24,17 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # sherpa-onnx-sys 把预编译库下到 target/sherpa-onnx-prebuilt/<包名>/lib，构建脚本只看 lib 目录在不在。
+      # rust-cache 恢复出来的缓存里目录还在、库文件却没了：构建脚本不重新下载，链接时找不到 sherpa-onnx-c-api。
+      # 库文件不在时删掉整个目录和 sherpa-onnx-sys 的构建记录（新旧两种 target 布局），让构建脚本重跑、重新下载。
+      - name: sherpa-onnx 预编译库
+        shell: bash
+        run: |
+          if ! compgen -G "target/sherpa-onnx-prebuilt/*/lib/*sherpa-onnx-c-api*" > /dev/null; then
+            rm -rf target/sherpa-onnx-prebuilt target/*/build/sherpa-onnx-sys* target/*/.fingerprint/sherpa-onnx-sys* \
+              target/*/*/build/sherpa-onnx-sys* target/*/*/.fingerprint/sherpa-onnx-sys*
+          fi
+
       - name: 前端：类型检查、测试、构建
         working-directory: apps/claude-mom
         run: |

@@ -186,6 +186,112 @@ pub fn open_desktop_download(platform: String) -> Result<(), String> {
         Ok(())
     };
     open().map_err(|error| format!("{error:#}"))
+// ── 页面扩展 ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct ExtensionsPayload {
+    extensions: Vec<claude_local::extensions::ExtensionInfo>,
+}
+
+fn extensions_payload() -> ExtensionsPayload {
+    ExtensionsPayload { extensions: claude_local::extensions::list() }
+}
+
+const REFRESH_HINT: &str = "刷新 Claude 页面（Cmd/Ctrl+R）生效。";
+
+#[tauri::command]
+pub fn claude_local_extensions() -> CommandResult<ExtensionsPayload> {
+    ok("", extensions_payload())
+}
+
+#[tauri::command]
+pub fn claude_local_extension_enable(id: String, enabled: bool) -> CommandResult<ExtensionsPayload> {
+    match claude_local::extensions::set_enabled(&id, enabled) {
+        Ok(extensions) => {
+            let name = extensions.iter().find(|item| item.id == id).map_or(id.as_str(), |item| item.name.as_str());
+            let message = format!("已{}「{name}」，{REFRESH_HINT}", if enabled { "启用" } else { "停用" });
+            ok(&message, ExtensionsPayload { extensions })
+        }
+        Err(error) => failed(&format!("{error:#}"), extensions_payload()),
+    }
+}
+
+#[tauri::command]
+pub async fn claude_local_extension_import(path: String) -> CommandResult<ExtensionsPayload> {
+    let result = tauri::async_runtime::spawn_blocking(move || claude_local::extensions::import(std::path::Path::new(&path))).await;
+    match result {
+        Ok(Ok(imported)) => {
+            let manifest = &imported.manifest;
+            let message = match imported.replaced {
+                Some(old) => format!("已把「{}」从 {old} 更新到 {}。{REFRESH_HINT}", manifest.name, manifest.version),
+                None => format!("已导入「{}」{}，打开开关后{REFRESH_HINT}", manifest.name, manifest.version),
+            };
+            ok(&message, extensions_payload())
+        }
+        Ok(Err(error)) => failed(&format!("导入失败：{error:#}"), extensions_payload()),
+        Err(error) => failed(&format!("导入失败：{error}"), extensions_payload()),
+    }
+}
+
+#[tauri::command]
+pub fn claude_local_extension_remove(id: String) -> CommandResult<ExtensionsPayload> {
+    match claude_local::extensions::remove(&id) {
+        Ok(name) => ok(&format!("已删除「{name}」，{REFRESH_HINT}"), extensions_payload()),
+        Err(error) => failed(&format!("{error:#}"), extensions_payload()),
+    }
+}
+
+#[tauri::command]
+pub fn claude_local_extension_open_folder() -> CommandResult<ExtensionsPayload> {
+    match claude_local::extensions::open_folder() {
+        Ok(()) => ok("", extensions_payload()),
+        Err(error) => failed(&format!("{error:#}"), extensions_payload()),
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarketPayload {
+    entries: Vec<crate::market::MarketEntry>,
+}
+
+#[tauri::command]
+pub async fn claude_local_extension_market() -> CommandResult<MarketPayload> {
+    match crate::market::fetch().await {
+        Ok(entries) => ok("", MarketPayload { entries }),
+        Err(error) => failed(&format!("{error:#}"), MarketPayload { entries: Vec::new() }),
+    }
+}
+
+/// 从市场安装或更新。新装的直接启用（用户点的就是「安装」）；更新保留原来的开关。
+#[tauri::command]
+pub async fn claude_local_extension_install(entry: crate::market::MarketEntry) -> CommandResult<ExtensionsPayload> {
+    match crate::market::install(&entry).await {
+        Ok(imported) => {
+            let manifest = &imported.manifest;
+            let message = match imported.replaced {
+                Some(old) => format!("已把「{}」从 {old} 更新到 {}。{REFRESH_HINT}", manifest.name, manifest.version),
+                None => match claude_local::extensions::set_enabled(&manifest.id, true) {
+                    Ok(_) => format!("已安装并启用「{}」{}，{REFRESH_HINT}", manifest.name, manifest.version),
+                    Err(error) => format!("已安装「{}」，但没能启用：{error:#}", manifest.name),
+                },
+            };
+            ok(&message, extensions_payload())
+        }
+        Err(error) => failed(&format!("安装「{}」失败：{error:#}", entry.name), extensions_payload()),
+    }
+}
+
+/// 在浏览器里打开扩展的仓库页；只开 GitHub 上的地址。
+#[tauri::command]
+pub fn claude_local_extension_open_page(url: String) -> CommandResult<Value> {
+    let parsed = reqwest::Url::parse(&url);
+    if !parsed.is_ok_and(|parsed| parsed.scheme() == "https" && parsed.host_str() == Some("github.com")) {
+        return failed("只能打开 GitHub 上的页面", json!({}));
+    }
+    match std::process::Command::new(if cfg!(windows) { "explorer" } else { "/usr/bin/open" }).arg(&url).spawn() {
+        Ok(_) => ok("", json!({})),
+        Err(error) => failed(&format!("打不开浏览器：{error}"), json!({})),
+    }
 }
 
 // ── 本地听写模型 ─────────────────────────────────────────────────────────

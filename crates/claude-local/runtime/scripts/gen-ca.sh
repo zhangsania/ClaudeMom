@@ -13,9 +13,9 @@ fi
 cat > ca/openssl.cnf <<'EOF'
 [ req ]
 distinguished_name = dn
-prompt = no
+# 主题只由 -subj 给：这里写了 CN 再加 prompt = no，macOS 自带的 LibreSSL 会忽略 -subj，
+# CA 和服务端证书同名，被当成自签名拒绝。
 [ dn ]
-CN = Claude Local
 [ v3_ca ]
 basicConstraints = critical,CA:TRUE
 keyUsage = critical,keyCertSign,cRLSign

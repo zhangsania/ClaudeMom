@@ -16,7 +16,7 @@
         "title": "YClaude",
         "width": 860,
         "height": 600,
-        "minWidth": 720,
+        "minWidth": 780,
         "minHeight": 520,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true

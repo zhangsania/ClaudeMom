@@ -153,8 +153,8 @@ export function endFrame(trailers = {}) {
 export const ts = (d = new Date()) =>
   Buffer.concat([i64(1, BigInt(Math.floor(d.getTime() / 1000))), vi(2, d.getMilliseconds() * 1e6)]);
 
-/** Conversation{id,title,status,current_leaf_message_id,created_at,updated_at} */
-export function conversation({ id, title, status = 1, leaf, created, updated, model }) {
+/** Conversation{id,title,status,current_leaf_message_id,created_at,updated_at,project_id=14} */
+export function conversation({ id, title, status = 1, leaf, created, updated, model, projectId }) {
   return Buffer.concat([
     ld(1, id),
     title ? ld(2, title) : Buffer.alloc(0),
@@ -163,6 +163,7 @@ export function conversation({ id, title, status = 1, leaf, created, updated, mo
     updated ? ld(5, ts(updated)) : Buffer.alloc(0),
     model ? ld(6, ld(2, model)) : Buffer.alloc(0),
     leaf ? ld(7, leaf) : Buffer.alloc(0),
+    projectId ? ld(14, projectId) : Buffer.alloc(0),
   ]);
 }
 
