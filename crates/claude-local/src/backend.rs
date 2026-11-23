@@ -1791,10 +1791,12 @@ pub fn status() -> Result<ClaudeLocalStatus> {
         Some("首次使用需要准备并信任本地证书".into())
     } else if config.enabled && config.voice_input && !dictation_ready {
         Some("本地听写尚未就绪，请在语音设置中启用 SenseVoice 并准备模型".into())
-    } else {
+    } else if config.enabled && config.voice_input {
         fs::read_to_string(root.join("compatibility-warning.txt"))
             .ok()
             .filter(|text| !text.is_empty())
+    } else {
+        None
     };
     Ok(ClaudeLocalStatus {
         supported: source_supported(&source),

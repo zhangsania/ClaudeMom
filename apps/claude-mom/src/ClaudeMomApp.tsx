@@ -218,7 +218,7 @@ export function ClaudeMomApp() {
                 <span className="cm-item-name">{profile.name}</span>
                 <span className="cm-item-sub">{profile.model ? modelLabel(profile, profile.model) : "未选模型"}</span>
               </span>
-              {profile.source !== "manual" ? <span className="cm-tag">{SOURCE_LABELS[profile.source] ?? profile.source}</span> : null}
+              {profile.source !== "manual" && profile.source !== "ccswitch" ? <span className="cm-tag">{SOURCE_LABELS[profile.source] ?? profile.source}</span> : null}
             </button>
           ))}
           {!book.profiles.length && !draft ? <p className="cm-empty">暂无分组</p> : null}
@@ -396,7 +396,7 @@ function UpstreamEditor({ draft, active, dirty, busy, onChange, onSave, onActiva
         ) : (
           <div className="cm-card-line">
             <span className="cm-mono cm-ellipsis" title={GATEWAY_URL}>{GATEWAY_URL}</span>
-            {draft.source !== "manual" ? <span className="cm-tag">来自 {SOURCE_LABELS[draft.source] ?? draft.source}</span> : null}
+            {draft.source !== "manual" && draft.source !== "ccswitch" ? <span className="cm-tag">来自 {SOURCE_LABELS[draft.source] ?? draft.source}</span> : null}
             <button className="cm-link" onClick={() => setEditConnection(true)} type="button">修改</button>
           </div>
         )}
