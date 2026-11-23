@@ -6,6 +6,7 @@ import { checkForUpdate, currentVersion, installUpdate, type UpdateState } from 
 
 type Notice = { text: string; tone: "ok" | "error" } | null;
 type ClaudeAction = "launch" | "stop" | "trust";
+type DesktopDownload = "win32-x64" | "darwin-arm64";
 
 const errorText = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
@@ -56,6 +57,14 @@ export function ClaudeMomApp() {
     } catch (cause) {
       setUpdate({ phase: "failed", message: errorText(cause) });
       say(`更新失败：${errorText(cause)}`, "error");
+    }
+  };
+
+  const openDesktopDownload = async (platform: DesktopDownload) => {
+    try {
+      await invoke("open_desktop_download", { platform });
+    } catch (cause) {
+      say(`打开下载链接失败：${errorText(cause)}`, "error");
     }
   };
 
@@ -214,6 +223,29 @@ export function ClaudeMomApp() {
           ))}
           {!book.profiles.length && !draft ? <p className="cm-empty">暂无分组</p> : null}
         </nav>
+        <footer className="cm-side-foot">
+          <div className="cm-about">
+            <span>{version ? `YClaude ${version}` : "YClaude"}</span>
+            {update.phase === "available" ? (
+              <button className="cm-link" onClick={() => void runInstall()} type="button">更新到 {update.version}</button>
+            ) : update.phase === "downloading" ? (
+              <span role="status">正在更新{update.percent != null ? ` · ${update.percent}%` : "…"}</span>
+            ) : (
+              <button className="cm-link" disabled={update.phase === "checking"} onClick={() => void runUpdateCheck()} type="button">
+                {update.phase === "checking" ? "检查中…" : update.phase === "latest" ? "已是最新" : "检查更新"}
+              </button>
+            )}
+          </div>
+          <div className="cm-desktop-downloads" role="group" aria-label="Claude Desktop 5.11492.5 下载">
+            <span className="cm-desktop-download-title">Claude Desktop 5.11492.5</span>
+            <button className="cm-link" onClick={() => void openDesktopDownload("win32-x64")} title="下载 Windows x64 官方独立包（.nupkg）" type="button">
+              <Download aria-hidden="true" />Windows x64
+            </button>
+            <button className="cm-link" onClick={() => void openDesktopDownload("darwin-arm64")} title="下载 Mac Apple Silicon 官方独立包（.zip）" type="button">
+              <Download aria-hidden="true" />Mac Apple Silicon
+            </button>
+          </div>
+        </footer>
       </aside>
 
       <main className="cm-main">
@@ -293,16 +325,7 @@ export function ClaudeMomApp() {
         </section>
 
         <footer className="cm-status">
-          <span title={version ? `YClaude ${version}` : undefined}>{status?.port ? `本地服务 · 端口 ${status.port}` : "本地服务未运行"}</span>
-          {update.phase === "available" ? (
-            <button className="cm-update-chip" onClick={() => void runInstall()} type="button">新版本 {update.version}，点此更新</button>
-          ) : update.phase === "downloading" ? (
-            <span className="cm-update-chip">正在更新到 {update.version}{update.percent != null ? ` · ${update.percent}%` : "…"}</span>
-          ) : (
-            <button className="cm-link" disabled={update.phase === "checking"} onClick={() => void runUpdateCheck()} type="button">
-              {update.phase === "checking" ? "检查中…" : update.phase === "latest" ? "已是最新" : "检查更新"}
-            </button>
-          )}
+          <span>{status?.port ? `本地服务 · 端口 ${status.port}` : "本地服务未运行"}</span>
           {notice ? (
             <span className="cm-notice" data-tone={notice.tone} role={notice.tone === "error" ? "alert" : "status"}>
               {notice.text}
