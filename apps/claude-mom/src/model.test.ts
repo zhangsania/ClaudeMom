@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { claudeState, emptyProfile, formatWindow, hostOf, normalizeModels, profileProblem, setupSteps, templateLabel, type ClaudeStatus } from "./model.ts";
+import { claudeState, emptyProfile, formatWindow, normalizeModels, profileProblem, setupSteps, templateLabel, type ClaudeStatus } from "./model.ts";
 
 const status = (patch: Partial<ClaudeStatus> = {}): ClaudeStatus => ({
   supported: true, sourceApp: "", version: "1.0", claudeRunning: false, running: false, connected: false,
@@ -10,15 +10,12 @@ const status = (patch: Partial<ClaudeStatus> = {}): ClaudeStatus => ({
   ...patch,
 });
 
-test("上游表单：要有效的 Base URL 和默认模型，不能写到 /v1/messages", () => {
-  const profile = { ...emptyProfile(), baseUrl: "https://api.example.com", model: "glm-5" };
+test("分组需要 API Key 和默认模型", () => {
+  const profile = { ...emptyProfile(), apiKey: "sk-test-only", model: "glm-5" };
   assert.equal(profileProblem(profile), null);
-  assert.equal(profileProblem({ ...profile, baseUrl: "" }), "填一个 Base URL");
-  assert.equal(profileProblem({ ...profile, baseUrl: "api.example.com" }), "Base URL 不是有效地址");
-  assert.equal(profileProblem({ ...profile, baseUrl: "ftp://x" }), "Base URL 要以 http:// 或 https:// 开头");
-  assert.match(profileProblem({ ...profile, baseUrl: "https://x/v1/messages" }) ?? "", /不要带/);
+  assert.equal(profileProblem({ ...profile, apiKey: "" }), "请输入有效的 API Key");
+  assert.equal(profileProblem({ ...profile, apiKey: "sk-test\nkey" }), "请输入有效的 API Key");
   assert.equal(profileProblem({ ...profile, model: " " }), "选一个默认模型");
-  assert.equal(hostOf("http://127.0.0.1:3425"), "127.0.0.1:3425");
 });
 
 test("模型列表去重，默认模型排第一", () => {
@@ -35,7 +32,7 @@ test("状态文案：已连接、运行中、外部打开、未启动", () => {
 });
 
 test("启动前清单按顺序列出缺的步骤", () => {
-  const ready = { ...emptyProfile(), baseUrl: "https://a.example", model: "m" };
+  const ready = { ...emptyProfile(), apiKey: "sk-test-only", model: "m" };
   assert.deepEqual(setupSteps(status(), ready), []);
   assert.deepEqual(setupSteps(status({ caTrusted: false, nodeAvailable: false }), null).map((step) => step.id), ["upstream", "node", "trust"]);
   // 第三方模式不经代理：不要求信任证书。
@@ -54,7 +51,7 @@ test("前端调用的命令都在后端注册了", () => {
   const lib = readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
   // 命令名有的直接传给 invoke，有的经 bookCall 转一手：按字面量收。
   const called = new Set([...app.matchAll(/"(claude_(?:mom|local)_[a-z_]+)"/g)].map((match) => match[1]));
-  assert.ok(called.size >= 9, [...called].join(","));
+  assert.ok(called.has("claude_mom_import_web_key"));
   for (const command of called) assert.ok(new RegExp(`::${command},`).test(lib), `${command} 没有注册`);
 });
 

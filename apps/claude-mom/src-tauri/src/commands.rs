@@ -33,11 +33,13 @@ static BOOK_LOCK: Mutex<()> = Mutex::new(());
 pub struct BookPayload {
     profiles: Vec<UpstreamProfile>,
     active_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    imported_id: Option<String>,
 }
 
 impl From<UpstreamBook> for BookPayload {
     fn from(book: UpstreamBook) -> Self {
-        Self { profiles: book.profiles, active_id: book.active_id }
+        Self { profiles: book.profiles, active_id: book.active_id, imported_id: None }
     }
 }
 
@@ -47,7 +49,7 @@ pub struct ModelsPayload {
 }
 
 fn load() -> anyhow::Result<UpstreamBook> {
-    claude_mom::load_book(&claude_mom::default_book_path())
+    claude_mom::load_groups()
 }
 
 /// 改上游列表并存盘，然后把选中的那组交给 Claude 本地服务。
@@ -55,7 +57,7 @@ fn mutate<T>(change: impl FnOnce(&mut UpstreamBook) -> anyhow::Result<T>) -> any
     let _guard = BOOK_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let mut book = load()?;
     let value = change(&mut book)?;
-    claude_mom::save_book(&claude_mom::default_book_path(), &book)?;
+    claude_mom::save_book(&claude_mom::groups_path(), &book)?;
     Ok((book, value))
 }
 
@@ -71,22 +73,24 @@ fn respond<T>(result: anyhow::Result<(UpstreamBook, T)>, message: impl FnOnce(T)
 #[tauri::command]
 pub fn claude_mom_load() -> CommandResult<BookPayload> {
     match load() {
-        Ok(book) => ok("已读取上游。", book.into()),
+        Ok(book) => ok("已读取分组。", book.into()),
         Err(error) => failed(&format!("{error:#}"), BookPayload::default()),
     }
 }
 
 /// 新增（id 为空）或更新一组；`activate` 为真时同时设为当前。
 #[tauri::command]
-pub fn claude_mom_save_profile(profile: UpstreamProfile, activate: Option<bool>) -> CommandResult<BookPayload> {
+pub fn claude_mom_save_profile(mut profile: UpstreamProfile, activate: Option<bool>) -> CommandResult<BookPayload> {
     let result = mutate(|book| {
+        anyhow::ensure!(claude_mom::is_valid_api_key(&profile.api_key), "请输入有效的 API Key");
+        profile.base_url = claude_mom::GATEWAY_URL.into();
         let id = book.upsert(profile);
         if activate.unwrap_or(false) {
             book.active_id = Some(id.clone());
         }
         Ok(book.profiles.iter().find(|item| item.id == id).map(|item| item.name.clone()).unwrap_or_default())
     });
-    respond(result, |name| format!("已保存「{name}」。"), "保存上游失败")
+    respond(result, |name| format!("已保存「{name}」。"), "保存分组失败")
 }
 
 #[tauri::command]
@@ -96,7 +100,7 @@ pub fn claude_mom_delete_profile(id: String) -> CommandResult<BookPayload> {
         book.remove(&id);
         Ok(name)
     });
-    respond(result, |name| format!("已删除「{name}」。"), "删除上游失败")
+    respond(result, |name| format!("已删除「{name}」。"), "删除分组失败")
 }
 
 #[tauri::command]
@@ -107,98 +111,36 @@ pub fn claude_mom_set_active(id: String) -> CommandResult<BookPayload> {
             .iter()
             .find(|item| item.id == id)
             .map(|item| item.name.clone())
-            .ok_or_else(|| anyhow::anyhow!("这组上游已经不在了"))?;
+            .ok_or_else(|| anyhow::anyhow!("分组已不存在"))?;
         book.active_id = Some(id.clone());
         Ok(name)
     });
-    respond(result, |name| format!("已切换到「{name}」，重新启动 Claude 后生效。"), "切换上游失败")
-}
-
-/// 从其他工具导入：`ccswitch` / `magpie` / `codexpp`。网关类来源（Magpie、Codex++）没有模型时顺手拉一次。
-#[tauri::command]
-pub async fn claude_mom_import(source: String) -> CommandResult<BookPayload> {
-    let imported = match source.as_str() {
-        claude_mom::SOURCE_CC_SWITCH => claude_mom::cc_switch_profiles(&claude_mom::default_cc_switch_db()),
-        claude_mom::SOURCE_MAGPIE => Ok(vec![claude_mom::magpie_profile(
-            &claude_mom::default_magpie_dir(),
-            std::env::var("MAGPIE_ADDR").ok().as_deref(),
-        )]),
-        claude_mom::SOURCE_CODEX_PLUS_PLUS => {
-            claude_mom::codex_plus_plus_profile(&claude_mom::codex_plus_plus_state_dir()).map(|profile| vec![profile])
-        }
-        other => Err(anyhow::anyhow!("未知的导入来源：{other}")),
-    };
-    let mut imported = match imported {
-        Ok(imported) => imported,
-        Err(error) => return failed(&format!("{error:#}"), load().unwrap_or_default().into()),
-    };
-    if imported.is_empty() {
-        return failed("没有找到可导入的 Claude 供应商（只导入 Anthropic 格式的）。", load().unwrap_or_default().into());
-    }
-    let mut unreachable = Vec::new();
-    for profile in imported.iter_mut().filter(|profile| profile.models.is_empty()) {
-        match claude_mom::fetch_models(&profile.base_url, &profile.api_key).await {
-            Ok(models) => {
-                profile.models = models.iter().map(|model| model.id.clone()).collect();
-                profile.model_names = models
-                    .iter()
-                    .filter_map(|model| Some((model.id.clone(), model.display_name.clone()?)))
-                    .collect();
-                if profile.model.is_empty() {
-                    profile.model = profile.models.first().cloned().unwrap_or_default();
-                }
-                profile.context_window = models
-                    .iter()
-                    .find(|model| model.id == profile.model)
-                    .and_then(|model| model.context_window);
-            }
-            Err(_) => unreachable.push(profile.name.clone()),
-        }
-    }
-    let result = tauri::async_runtime::spawn_blocking(move || mutate(|book| Ok(book.merge_imported(imported))))
-        .await
-        .unwrap_or_else(|error| Err(anyhow::anyhow!("{error}")));
-    respond(
-        result,
-        |(added, updated)| {
-            let mut message = format!("已导入：新增 {added} 组，更新 {updated} 组。");
-            if !unreachable.is_empty() {
-                message.push_str(&format!("{} 暂时连不上，模型列表稍后再拉。", unreachable.join("、")));
-            }
-            message
-        },
-        "导入失败",
-    )
+    respond(result, |name| format!("已切换到「{name}」，重新启动 Claude 后生效。"), "切换分组失败")
 }
 
 #[tauri::command]
-pub async fn claude_mom_fetch_models(base_url: String, api_key: String) -> CommandResult<ModelsPayload> {
-    match claude_mom::fetch_models(&base_url, &api_key).await {
+pub fn claude_mom_import_web_key(content: String) -> CommandResult<BookPayload> {
+    let result = mutate(|book| book.import_web_key(&content));
+    match result {
+        Ok((book, id)) => {
+            let mut payload = BookPayload::from(book);
+            payload.imported_id = Some(id);
+            ok("已导入分组。", payload)
+        }
+        Err(error) => failed(&format!("导入失败：{error:#}"), BookPayload::default()),
+    }
+}
+
+#[tauri::command]
+pub async fn claude_mom_fetch_models(api_key: String) -> CommandResult<ModelsPayload> {
+    if !claude_mom::is_valid_api_key(&api_key) {
+        return failed("请输入有效的 API Key", ModelsPayload::default());
+    }
+    match claude_mom::fetch_models(claude_mom::GATEWAY_URL, &api_key).await {
         Ok(models) => ok(&format!("拉到 {} 个模型。", models.len()), ModelsPayload { models }),
         Err(error) => failed(&format!("{error:#}"), ModelsPayload::default()),
     }
 }
-
-/// 原生听写开关：只改 Claude 的「原生听写」，转写用本机 SenseVoice。返回最新的 Claude 状态。
-#[tauri::command]
-pub async fn claude_mom_set_voice(enabled: bool) -> CommandResult<Value> {
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let mut config = claude_local::status()?.config;
-        config.voice_input = enabled;
-        claude_local::configure(config)
-    })
-    .await
-    .unwrap_or_else(|error| Err(anyhow::anyhow!("{error}")));
-    match result {
-        Ok(status) => ok(
-            if enabled { "原生听写已打开，重新启动 Claude 后在输入框里能看到麦克风。" } else { "原生听写已关闭。" },
-            serde_json::to_value(status).unwrap_or_default(),
-        ),
-        Err(error) => failed(&format!("{error:#}"), json!({})),
-    }
-}
-
-// ── Claude 本身：状态、设置、动作（转给 claude-local） ─────────────────────────
 
 #[tauri::command]
 pub async fn claude_local_status() -> CommandResult<Value> {
@@ -206,15 +148,6 @@ pub async fn claude_local_status() -> CommandResult<Value> {
         Ok(Ok(status)) => ok("Claude 状态已读取。", serde_json::to_value(status).unwrap_or_default()),
         Ok(Err(error)) => failed(&format!("{error:#}"), json!({})),
         Err(error) => failed(&format!("Claude 状态读取失败：{error}"), json!({})),
-    }
-}
-
-#[tauri::command]
-pub async fn claude_local_configure(config: claude_local::ClaudeLocalSettings) -> CommandResult<Value> {
-    match tauri::async_runtime::spawn_blocking(move || claude_local::configure(config)).await {
-        Ok(Ok(status)) => ok("设置已保存。", serde_json::to_value(status).unwrap_or_default()),
-        Ok(Err(error)) => failed(&format!("{error:#}"), json!({})),
-        Err(error) => failed(&format!("保存设置失败：{error}"), json!({})),
     }
 }
 

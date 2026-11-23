@@ -62,16 +62,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::claude_local_status,
-            commands::claude_local_configure,
             commands::claude_local_action,
             commands::open_desktop_download,
             commands::claude_mom_load,
             commands::claude_mom_save_profile,
             commands::claude_mom_delete_profile,
             commands::claude_mom_set_active,
-            commands::claude_mom_import,
+            commands::claude_mom_import_web_key,
             commands::claude_mom_fetch_models,
-            commands::claude_mom_set_voice,
             commands::dictation_local_model_status,
             commands::download_dictation_local_model,
         ])

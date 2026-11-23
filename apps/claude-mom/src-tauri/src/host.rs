@@ -2,12 +2,12 @@
 
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use claude_local::dictation::EngineError;
 use claude_local::{ClaudeLocalSettings, Host, Upstream};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 /// 状态目录：`CLAUDE_MOM_STATE_DIR` 覆盖，否则 `~/.claude-mom`。
 pub fn state_dir() -> PathBuf {
@@ -22,25 +22,26 @@ pub fn state_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".claude-mom"))
 }
 
-fn settings_path() -> PathBuf {
-    state_dir().join("settings.json")
-}
-
-/// 设置文件里 Claude 那份放在 `claudeDesktopLocal` 下（与 Codex++ 同名同形状）；其它键原样保留。
-const SETTINGS_KEY: &str = "claudeDesktopLocal";
-
-static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
-
-fn read_settings_map() -> Result<Map<String, Value>> {
-    match std::fs::read(settings_path()) {
-        Ok(bytes) => match serde_json::from_slice::<Value>(&bytes)
-            .with_context(|| format!("设置文件损坏：{}", settings_path().display()))?
-        {
-            Value::Object(map) => Ok(map),
-            _ => bail!("设置文件格式不对：{}", settings_path().display()),
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Map::new()),
-        Err(error) => Err(error).with_context(|| format!("读取设置失败：{}", settings_path().display())),
+fn fixed_config() -> ClaudeLocalSettings {
+    ClaudeLocalSettings {
+        enabled: true,
+        localization: true,
+        voice_input: false,
+        computer_use: true,
+        background_mode: true,
+        force_background_mode: true,
+        cowork: false,
+        hub_home: false,
+        template: String::new(),
+        three_p_mode: false,
+        display_name: "Local User".into(),
+        email: "local@claude.local".into(),
+        plan: "ultra".into(),
+        session_sync: true,
+        hide_unrouted_models: true,
+        code_share_home: Some(true),
+        import_cli_sessions: true,
+        ..ClaudeLocalSettings::default()
     }
 }
 
@@ -52,16 +53,16 @@ impl ClaudeMomHost {
     }
 
     fn active_upstream(&self) -> Result<Upstream> {
-        let book = crate::upstreams::load_book(&crate::upstreams::default_book_path())?;
+        let book = crate::upstreams::load_groups()?;
         let profile = book
             .active()
-            .context("还没有上游：先添加一组 Base URL 和 Key，或从 cc-switch / Magpie / Codex++ 导入")?;
+            .context("还没有分组：先添加 API Key，或导入网页导出的分组")?;
         let upstream = profile.to_upstream();
-        if upstream.root.is_empty() {
-            bail!("当前上游「{}」没有填 Base URL", profile.name);
+        if !crate::upstreams::is_valid_api_key(&upstream.token) {
+            bail!("当前分组「{}」的 API Key 无效", profile.name);
         }
         if upstream.default_model.is_empty() {
-            bail!("当前上游「{}」还没选默认模型", profile.name);
+            bail!("当前分组「{}」还没选默认模型", profile.name);
         }
         Ok(upstream)
     }
@@ -77,34 +78,14 @@ impl Host for ClaudeMomHost {
     }
 
     fn load_config(&self) -> Result<ClaudeLocalSettings> {
-        let map = read_settings_map()?;
-        let stored = map.get(SETTINGS_KEY).cloned();
-        let mut config: ClaudeLocalSettings = stored
-            .clone()
-            .map(serde_json::from_value)
-            .transpose()?
-            .unwrap_or_default();
-        // ClaudeMom 只有完整功能模式。
-        config.enabled = true;
-        // 会话同步默认开：平时在普通 Claude / 3p 模式建的会话记录在 ~/.claude，完整功能模式用独立目录，
-        // 不同步的话左侧列表里的会话全显示「在磁盘上未找到会话」。用户关掉过就尊重。
-        if stored.as_ref().and_then(|value| value.get("sessionSync")).is_none() {
-            config.session_sync = true;
-        }
-        // Code 页签默认和命令行共用 ~/.claude（填上实际生效的值，界面才显示得对）。
-        if config.code_share_home.is_none() {
-            config.code_share_home = Some(self.default_code_share_home());
-        }
-        Ok(config)
+        Ok(fixed_config())
     }
 
     fn save_config(&self, config: &ClaudeLocalSettings) -> Result<()> {
-        let _guard = SETTINGS_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let mut map = read_settings_map()?;
-        let mut config = config.clone();
-        config.enabled = true;
-        map.insert(SETTINGS_KEY.into(), serde_json::to_value(config)?);
-        claude_local::fsutil::atomic_write(&settings_path(), &serde_json::to_vec_pretty(&Value::Object(map))?)
+        if *config != fixed_config() {
+            bail!("此版本的 Claude 设置已固定");
+        }
+        Ok(())
     }
 
     fn preview_upstream(&self, _config: &ClaudeLocalSettings) -> Result<Upstream> {

@@ -23,7 +23,7 @@ export type UpstreamProfile = {
   sourceId: string;
 };
 
-export type UpstreamBook = { profiles: UpstreamProfile[]; activeId: string | null };
+export type UpstreamBook = { profiles: UpstreamProfile[]; activeId: string | null; importedId?: string };
 
 export type UpstreamModel = { id: string; displayName: string | null; contextWindow: number | null };
 
@@ -91,38 +91,18 @@ export const SOURCE_LABELS: Record<string, string> = {
   ccswitch: "cc-switch",
   magpie: "Magpie",
   codexpp: "Codex++",
+  "yclaude-web": "网页",
 };
 
-export const IMPORT_SOURCES: Array<{ id: UpstreamSource; label: string; detail: string }> = [
-  { id: "ccswitch", label: "cc-switch", detail: "导入 cc-switch 里的 Claude 供应商" },
-  { id: "magpie", label: "Magpie", detail: "把 Magpie 的本机网关当上游" },
-  { id: "codexpp", label: "Codex++", detail: "把 Codex++ 的本机网关当上游" },
-];
+export const GATEWAY_URL = "https://yueziyue.uk";
 
 export function emptyProfile(): UpstreamProfile {
-  return { id: "", name: "", baseUrl: "", apiKey: "", model: "", smallModel: "", models: [], contextWindow: null, modelNames: {}, source: "manual", sourceId: "" };
-}
-
-export function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url.trim();
-  }
+  return { id: "", name: "", baseUrl: GATEWAY_URL, apiKey: "", model: "", smallModel: "", models: [], contextWindow: null, modelNames: {}, source: "manual", sourceId: "" };
 }
 
 /** 表单校验：返回第一条问题，没有问题返回 null。 */
 export function profileProblem(profile: UpstreamProfile): string | null {
-  const base = profile.baseUrl.trim();
-  if (!base) return "填一个 Base URL";
-  let parsed: URL;
-  try {
-    parsed = new URL(base);
-  } catch {
-    return "Base URL 不是有效地址";
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "Base URL 要以 http:// 或 https:// 开头";
-  if (/\/v1\/messages\/?$/.test(parsed.pathname)) return "Base URL 只写到根地址，不要带 /v1/messages";
+  if (!/^[!-~]+$/.test(profile.apiKey.trim())) return "请输入有效的 API Key";
   if (!profile.model.trim()) return "选一个默认模型";
   return null;
 }
@@ -156,7 +136,8 @@ export function claudeState(status: ClaudeStatus | null, busy: string | null): {
 export function setupSteps(status: ClaudeStatus | null, active: UpstreamProfile | null): Array<{ id: "upstream" | "node" | "trust"; text: string }> {
   if (!status || !status.supported) return [];
   const steps: Array<{ id: "upstream" | "node" | "trust"; text: string }> = [];
-  if (!active || profileProblem(active)) steps.push({ id: "upstream", text: "先添加一组上游并选好默认模型" });
+  if (!active) steps.push({ id: "upstream", text: "尚未导入分组" });
+  else if (profileProblem(active)) steps.push({ id: "upstream", text: `当前分组：${profileProblem(active)}` });
   if (!status.nodeAvailable) steps.push({ id: "node", text: "需要 Node.js（支持 fetch 与 WebSocket 的版本）" });
   // 第三方模式下 Claude 不经代理，不需要信任本地证书。
   if (!status.caTrusted && !status.config.threePMode) steps.push({ id: "trust", text: "首次使用需要信任本地证书" });
