@@ -186,6 +186,8 @@ pub fn open_desktop_download(platform: String) -> Result<(), String> {
         Ok(())
     };
     open().map_err(|error| format!("{error:#}"))
+}
+
 // ── 页面扩展 ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
