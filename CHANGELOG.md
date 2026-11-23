@@ -1,5 +1,9 @@
 # 更新日志
 
+## 0.1.18 - 2026-11-23
+
+- 将 YClaude 版本号和更新按钮移到左侧栏底部，下方提供 Claude Desktop 5.11492.5 的 Windows x64 和 Mac Apple Silicon 下载链接。
+
 ## 0.1.17 - 2026-11-23
 
 - YClaude 的分组网关固定为 `https://yueziyue.uk`。左侧改为分组列表，移除 Claude 设置页和左下角的新增、导入菜单。
