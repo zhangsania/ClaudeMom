@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { Check, Download, Eye, EyeOff, FolderOpen, Loader2, PackagePlus, Play, Puzzle, RefreshCw, ShieldCheck, Square, Star, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -8,6 +9,8 @@ import { checkForUpdate, currentVersion, installUpdate, type UpdateState } from 
 type Notice = { text: string; tone: "ok" | "error" } | null;
 type ClaudeAction = "launch" | "stop" | "trust";
 type DesktopDownload = "win32-x64" | "darwin-arm64";
+type GroupMenu = { profile: UpstreamProfile; trigger: HTMLButtonElement; x: number; y: number };
+type KeyImport = { id?: string; message: string; success: boolean };
 
 const errorText = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
@@ -19,8 +22,37 @@ export function ClaudeMomApp() {
   const [status, setStatus] = useState<ClaudeStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  const [groupMenu, setGroupMenu] = useState<GroupMenu | null>(null);
   const pending = useRef(false);
   const keyFileInput = useRef<HTMLInputElement>(null);
+  const menuItem = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!groupMenu) return;
+    menuItem.current?.focus();
+    const close = () => setGroupMenu(null);
+    const closeOutside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !menuItem.current?.parentElement?.contains(event.target)) close();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" && event.key !== "Tab") return;
+      event.preventDefault();
+      groupMenu.trigger.focus();
+      close();
+    };
+    window.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [groupMenu]);
 
   const say = (text: string, tone: "ok" | "error" = "ok") => setNotice(text ? { text, tone } : null);
   // 提示过一会儿自己消失：成功的 5 秒，出错的 12 秒。
@@ -70,13 +102,13 @@ export function ClaudeMomApp() {
     }
   };
 
-  const acceptBook = useCallback((result: CommandResult<UpstreamBook>, keepSelection?: string | null) => {
+  const acceptBook = useCallback((result: CommandResult<UpstreamBook>, keepSelection?: string | null, keepDraft = false) => {
     const next = { profiles: result.profiles ?? [], activeId: result.activeId ?? null };
     setBook(next);
     const wanted = keepSelection ?? result.importedId ?? null;
     const target = next.profiles.find((profile) => profile.id === wanted) ?? next.profiles.find((profile) => profile.id === next.activeId) ?? next.profiles[0] ?? null;
     setSelectedId(target?.id ?? null);
-    setDraft(target ? { ...target } : null);
+    setDraft((current) => keepDraft && current && current.id === target?.id ? current : target ? { ...target } : null);
   }, []);
 
   const refreshStatus = useCallback(async () => {
@@ -91,16 +123,38 @@ export function ClaudeMomApp() {
 
   // 先读分组，再检测 Claude 状态。
   useEffect(() => {
-    void (async () => {
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+    let loadRevision = 0;
+    const load = async (id?: string) => {
+      const revision = ++loadRevision;
       try {
         const result = await invoke<CommandResult<UpstreamBook>>("claude_mom_load");
-        acceptBook(result);
+        if (disposed || revision !== loadRevision) return;
+        acceptBook(result, id);
         if (!isOk(result)) say(result.message, "error");
       } catch (cause) {
-        say(errorText(cause), "error");
+        if (!disposed && revision === loadRevision) say(errorText(cause), "error");
       }
-      await refreshStatus();
+      if (!disposed && revision === loadRevision) await refreshStatus();
+    };
+    void (async () => {
+      try {
+        unlisten = await listen<KeyImport>("yclaude-key-imported", ({ payload }) => {
+          if (disposed) return;
+          say(payload.message, payload.success ? "ok" : "error");
+          if (payload.success) void load(payload.id);
+        });
+      } catch (cause) {
+        if (!disposed) say(errorText(cause), "error");
+      }
+      if (disposed) unlisten?.();
+      else await load();
     })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [acceptBook, refreshStatus]);
 
   // Claude 开着或本地服务在跑时每 3 秒刷新一次状态；闲着不轮询（检测要查进程和证书）。
@@ -157,6 +211,22 @@ export function ClaudeMomApp() {
     setShowExtensions(false);
   };
 
+  const showGroupMenu = (profile: UpstreamProfile, trigger: HTMLButtonElement, x: number, y: number) => {
+    if (!pending.current) setGroupMenu({ profile, trigger, x, y });
+  };
+
+  const deleteProfile = (profile: UpstreamProfile) =>
+    run("delete", async () => {
+      const confirmed = await ask(`删除「${profile.name}」？`, {
+        title: "删除分组", kind: "warning", okLabel: "删除", cancelLabel: "取消",
+      });
+      if (!confirmed) return;
+      const result = await invoke<CommandResult<UpstreamBook>>("claude_mom_delete_profile", { id: profile.id });
+      if (isOk(result)) acceptBook(result, selectedId, selectedId !== profile.id);
+      say(result.message, isOk(result) ? "ok" : "error");
+      await refreshStatus();
+    });
+
   const importKey = (file: File) =>
     run("import", async () => {
       if (file.size > 16 * 1024) return say("导出文件太大", "error");
@@ -212,8 +282,18 @@ export function ClaudeMomApp() {
               className="cm-item"
               key={profile.id}
               onClick={() => select(profile.id)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                showGroupMenu(profile, event.currentTarget, event.clientX, event.clientY);
+              }}
               onDoubleClick={() => { if (!profileProblem(profile)) void bookCall("activate", "claude_mom_set_active", { id: profile.id }, profile.id); }}
-              title="双击设为当前"
+              onKeyDown={(event) => {
+                if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
+                event.preventDefault();
+                const rect = event.currentTarget.getBoundingClientRect();
+                showGroupMenu(profile, event.currentTarget, rect.left, rect.bottom);
+              }}
+              title="双击设为当前，右键打开菜单"
               type="button"
             >
               <span className="cm-radio" data-on={profile.id === book.activeId || undefined} />
@@ -226,6 +306,22 @@ export function ClaudeMomApp() {
           ))}
           {!book.profiles.length && !draft ? <p className="cm-empty">暂无分组</p> : null}
         </nav>
+        {groupMenu ? (
+          <div aria-label={groupMenu.profile.name} className="cm-menu cm-group-menu" role="menu"
+            style={{
+              left: `clamp(0px, ${groupMenu.x}px, calc(100vw - 136px))`,
+              top: `clamp(0px, ${groupMenu.y}px, calc(100vh - 40px))`,
+            }}
+          >
+            <button className="cm-btn-danger" ref={menuItem} role="menuitem" type="button" onClick={() => {
+              setGroupMenu(null);
+              groupMenu.trigger.focus();
+              void deleteProfile(groupMenu.profile);
+            }}>
+              <Trash2 aria-hidden="true" />删除分组
+            </button>
+          </div>
+        ) : null}
         <footer className="cm-side-foot">
           <div className="cm-about">
             <span>{version ? `YClaude ${version}` : "YClaude"}</span>
@@ -317,7 +413,7 @@ export function ClaudeMomApp() {
               key={draft.id}
               onActivate={() => void bookCall("activate", "claude_mom_set_active", { id: draft.id }, draft.id)}
               onChange={setDraft}
-              onDelete={() => void bookCall("delete", "claude_mom_delete_profile", { id: draft.id })}
+              onDelete={() => void deleteProfile(draft)}
               onDiscard={() => {
                 const saved = book.profiles.find((profile) => profile.id === draft.id);
                 if (saved) setDraft({ ...saved });

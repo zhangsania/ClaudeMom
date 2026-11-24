@@ -34,7 +34,7 @@ pub struct BookPayload {
     profiles: Vec<UpstreamProfile>,
     active_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    imported_id: Option<String>,
+    pub(crate) imported_id: Option<String>,
 }
 
 impl From<UpstreamBook> for BookPayload {

@@ -5,6 +5,7 @@ mod desktop_packages;
 #[cfg(target_os = "windows")]
 mod desktop_update;
 mod host;
+mod key_link;
 mod log;
 mod market;
 mod upstreams;
@@ -30,23 +31,20 @@ pub fn run() {
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(GUARD_PORT);
-    // 已经有一个在跑：交给系统把它带到前台（macOS 上 open 同一个 app 即可），自己退出。
-    let Ok(_guard) = std::net::TcpListener::bind(("127.0.0.1", guard_port)) else {
-        log::append("app.already_running", serde_json::json!({ "port": guard_port }));
-        return;
-    };
-    // 程序重启后，Claude 可能还挂在旧代理端口上：在原端口把本地服务拉起来，它的重试就能连上。
-    std::thread::spawn(|| match claude_local::resume_attached_proxy() {
-        Ok(Some(port)) => log::append("claude_local.resumed", serde_json::json!({ "port": port })),
-        Ok(None) => {}
-        Err(error) => log::append("claude_local.resume_failed", serde_json::json!({ "message": format!("{error:#}") })),
-    });
-
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| show_main_window(app)))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .setup(move |app| {
+            // Keep the lock shared with earlier YClaude versions.
+            app.manage(std::net::TcpListener::bind(("127.0.0.1", guard_port))?);
+            std::thread::spawn(|| match claude_local::resume_attached_proxy() {
+                Ok(Some(port)) => log::append("claude_local.resumed", serde_json::json!({ "port": port })),
+                Ok(None) => {}
+                Err(error) => log::append("claude_local.resume_failed", serde_json::json!({ "message": format!("{error:#}") })),
+            });
             install_tray(app)?;
             if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
                 let hide_target = window.clone();
@@ -60,6 +58,7 @@ pub fn run() {
                     }
                 });
             }
+            key_link::install(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

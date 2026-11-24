@@ -162,6 +162,8 @@ svg { width: 14px; height: 14px; flex: none; }
 }
 .cm-menu button:hover { background: var(--cm-accent-soft); }
 .cm-menu span { font-size: 11.5px; color: var(--cm-muted); }
+.cm-group-menu { position: fixed; bottom: auto; z-index: 30; width: 136px; }
+.cm-group-menu button { flex-direction: row; align-items: center; gap: 7px; }
 
 /* ── 主区 ─────────────────────────────── */
 .cm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
