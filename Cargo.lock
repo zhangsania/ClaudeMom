@@ -627,7 +627,7 @@ dependencies = [
 
 [[package]]
 name = "claude-local"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "claude-mom"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
