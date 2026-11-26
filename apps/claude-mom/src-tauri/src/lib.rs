@@ -7,7 +7,6 @@ mod desktop_update;
 mod host;
 mod key_link;
 mod log;
-mod market;
 mod upstreams;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -65,14 +64,6 @@ pub fn run() {
             commands::claude_local_status,
             commands::claude_local_action,
             commands::open_desktop_download,
-            commands::claude_local_extensions,
-            commands::claude_local_extension_enable,
-            commands::claude_local_extension_import,
-            commands::claude_local_extension_remove,
-            commands::claude_local_extension_open_folder,
-            commands::claude_local_extension_market,
-            commands::claude_local_extension_install,
-            commands::claude_local_extension_open_page,
             commands::claude_mom_load,
             commands::claude_mom_save_profile,
             commands::claude_mom_delete_profile,

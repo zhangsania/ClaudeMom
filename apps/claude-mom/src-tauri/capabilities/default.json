@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "ClaudeMom 主窗口：核心命令、窗口拖动，以及导入扩展包用的选文件和确认框。",
+  "description": "YClaude 主窗口：核心命令、窗口拖动、更新和确认框。",
   "windows": [
     "main"
   ],
@@ -9,7 +9,6 @@
     "core:window:allow-start-dragging",
     "updater:default",
     "process:allow-restart",
-    "dialog:allow-open",
     "dialog:allow-ask"
   ]
 }

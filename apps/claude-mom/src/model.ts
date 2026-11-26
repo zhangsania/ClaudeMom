@@ -62,62 +62,6 @@ export type ClaudeConfig = {
   importCliSessions?: boolean;
 };
 
-/** 页面扩展（与 core `extensions::ExtensionInfo` 一致）。 */
-export type ExtensionInfo = {
-  id: string;
-  name: string;
-  version: string;
-  author: string;
-  description: string;
-  builtin: boolean;
-  enabled: boolean;
-  /** 清单有问题时的原因：这样的扩展不会生效，也不能启用。 */
-  error: string | null;
-};
-
-/** 扩展市场的条目（与 `market::MarketEntry` 一致）。 */
-export type MarketEntry = {
-  id: string;
-  name: string;
-  version: string;
-  author: string;
-  description: string;
-  /** official：官方仓库里审核过的；community：作者自己的仓库，未审核。 */
-  source: "official" | "community";
-  repo: string;
-  path: string;
-  commit: string;
-  url: string;
-  stars?: number | null;
-};
-
-const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
-
-/** 按语义化版本比较：a 新返回正数，旧返回负数，一样（或看不懂）返回 0。构建后缀（+…）不参与比较。 */
-export function compareVersions(a: string, b: string): number {
-  const left = SEMVER.exec(a);
-  const right = SEMVER.exec(b);
-  if (!left || !right) return 0;
-  for (let index = 1; index <= 3; index++) {
-    const diff = Number(left[index]) - Number(right[index]);
-    if (diff) return Math.sign(diff);
-  }
-  const [pa, pb] = [left[4], right[4]];
-  if (!pa || !pb) return pa === pb ? 0 : pa ? -1 : 1; // 正式版比预发布新
-  const xs = pa.split(".");
-  const ys = pb.split(".");
-  for (let index = 0; index < Math.max(xs.length, ys.length); index++) {
-    const [x, y] = [xs[index], ys[index]];
-    if (x === undefined) return -1;
-    if (y === undefined) return 1;
-    const [nx, ny] = [/^\d+$/.test(x), /^\d+$/.test(y)];
-    if (nx && ny && Number(x) !== Number(y)) return Math.sign(Number(x) - Number(y));
-    if (nx !== ny) return nx ? -1 : 1;
-    if (x !== y) return x < y ? -1 : 1;
-  }
-  return 0;
-}
-
 export type ClaudeStatus = {
   supported: boolean;
   sourceApp: string;

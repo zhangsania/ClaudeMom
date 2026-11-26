@@ -28,7 +28,7 @@ static OPERATION: Mutex<()> = Mutex::new(());
 include!(concat!(env!("OUT_DIR"), "/templates.rs"));
 
 fn all_assets() -> impl Iterator<Item = &'static (&'static str, &'static [u8])> {
-    ASSETS.iter().chain(TEMPLATE_ASSETS.iter()).chain(crate::extensions::BUILTIN.iter())
+    ASSETS.iter().chain(TEMPLATE_ASSETS.iter())
 }
 
 /// 内嵌的录制版本：build id 与该版本前端的构建时间（秒，取自页面外壳的 data-build-timestamp），新的在前。
@@ -77,10 +77,6 @@ const ASSETS: &[(&str, &[u8])] = &[
     (
         "official-assets.mjs",
         include_bytes!("../runtime/official-assets.mjs"),
-    ),
-    (
-        "extensions.mjs",
-        include_bytes!("../runtime/extensions.mjs"),
     ),
     (
         "conversation-service.mjs",
@@ -934,25 +930,7 @@ fn install_assets(root: &Path) -> Result<()> {
             let _ = if path.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
         }
     }
-    // 内置扩展目录只放随程序打包的那几个：下架的、多出来的文件一并清掉。
-    let builtin_dir = root.join(crate::extensions::BUILTIN_DIR);
-    let shipped: std::collections::HashSet<PathBuf> =
-        crate::extensions::BUILTIN.iter().map(|(name, _)| root.join(name)).collect();
-    remove_unlisted(&builtin_dir, &shipped);
     Ok(())
-}
-
-/// 删掉 `dir` 下不在 `keep` 里的文件，以及删空了的文件夹。
-fn remove_unlisted(dir: &Path, keep: &std::collections::HashSet<PathBuf>) {
-    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
-        let path = entry.path();
-        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            remove_unlisted(&path, keep);
-            let _ = fs::remove_dir(&path);
-        } else if !keep.contains(&path) {
-            let _ = fs::remove_file(&path);
-        }
-    }
 }
 
 // 这些探测命令只输出短状态；所有等待均有上限，避免系统工具卡住管理器。
@@ -2037,9 +2015,6 @@ fn start_backend(
         .env("CLAUDE_LOCAL_READY_FILE", &ready_file)
         .env("CLAUDE_LOCAL_INSTANCE_ID", &instance)
         .env("CLAUDE_LOCAL_LOCALIZATION", flag(config.localization))
-        .env("CLAUDE_LOCAL_BUILTIN_EXTENSIONS_DIR", root.join(crate::extensions::BUILTIN_DIR))
-        .env("CLAUDE_LOCAL_EXTENSIONS_DIR", root.join("extensions"))
-        .env("CLAUDE_LOCAL_EXTENSIONS_STATE", root.join("extensions.json"))
         .env("CLAUDE_LOCAL_VOICE_INPUT", flag(config.voice_input))
         .env("CLAUDE_LOCAL_COMPUTER_USE", flag(config.computer_use))
         .env("CLAUDE_LOCAL_BACKGROUND_MODE", flag(config.background_mode))

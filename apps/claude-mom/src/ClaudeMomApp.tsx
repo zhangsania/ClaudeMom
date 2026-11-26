@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { ask, open } from "@tauri-apps/plugin-dialog";
-import { Check, Download, Eye, EyeOff, FolderOpen, Loader2, PackagePlus, Play, Puzzle, RefreshCw, ShieldCheck, Square, Star, Trash2, X } from "lucide-react";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { Check, Download, Eye, EyeOff, Loader2, Play, RefreshCw, ShieldCheck, Square, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { GATEWAY_URL, SOURCE_LABELS, WINDOW_PRESETS, claudeState, compareVersions, formatWindow, isOk, modelLabel, normalizeModels, profileProblem, setupSteps, type ClaudeStatus, type CommandResult, type ExtensionInfo, type MarketEntry, type UpstreamBook, type UpstreamModel, type UpstreamProfile } from "./model";
+import { GATEWAY_URL, SOURCE_LABELS, WINDOW_PRESETS, claudeState, formatWindow, isOk, modelLabel, normalizeModels, profileProblem, setupSteps, type ClaudeStatus, type CommandResult, type UpstreamBook, type UpstreamModel, type UpstreamProfile } from "./model";
 import { checkForUpdate, currentVersion, installUpdate, type UpdateState } from "./updates";
 
 type Notice = { text: string; tone: "ok" | "error" } | null;
@@ -18,7 +18,6 @@ export function ClaudeMomApp() {
   const [book, setBook] = useState<UpstreamBook>({ profiles: [], activeId: null });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<UpstreamProfile | null>(null);
-  const [showExtensions, setShowExtensions] = useState(false);
   const [status, setStatus] = useState<ClaudeStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
@@ -208,7 +207,6 @@ export function ClaudeMomApp() {
     if (!profile) return;
     setSelectedId(id);
     setDraft({ ...profile });
-    setShowExtensions(false);
   };
 
   const showGroupMenu = (profile: UpstreamProfile, trigger: HTMLButtonElement, x: number, y: number) => {
@@ -357,20 +355,6 @@ export function ClaudeMomApp() {
             </span>
           </div>
           <div className="cm-toolbar-actions">
-            <button aria-label={showExtensions ? "返回分组" : "扩展"} aria-pressed={showExtensions} className="cm-icon" onClick={() => setShowExtensions((shown) => !shown)} title={showExtensions ? "返回分组" : "扩展"} type="button">
-              <Puzzle />
-            </button>
-            <input
-              accept=".json"
-              hidden
-              ref={keyFileInput}
-              type="file"
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0];
-                event.currentTarget.value = "";
-                if (file) void importKey(file);
-              }}
-            />
             <button aria-label="打开 Key 文件" className="cm-icon" disabled={busy !== null} onClick={() => keyFileInput.current?.click()} title="打开网页导出的 YClaude Key 文件" type="button">
               {busy === "import" ? <Loader2 className="cm-spin" /> : <Download />}
             </button>
@@ -402,9 +386,7 @@ export function ClaudeMomApp() {
         ) : null}
 
         <section className="cm-body">
-          {showExtensions ? (
-            <Extensions threePMode={false} onNotice={say} />
-          ) : draft ? (
+          {draft ? (
             <UpstreamEditor
               active={draft.id === book.activeId}
               busy={busy}
@@ -449,241 +431,6 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
       <span className="cm-field-control">{children}</span>
       {hint ? <span className="cm-field-hint">{hint}</span> : null}
     </label>
-  );
-}
-
-function PageHead({ title, hint, children }: { title: string; hint: string; children?: ReactNode }) {
-  return (
-    <header className="cm-page-head">
-      <div className="cm-grow">
-        <h2>{title}<span className="cm-tag">所有上游通用</span></h2>
-        <p className="cm-field-hint">{hint}</p>
-      </div>
-      {children}
-    </header>
-  );
-}
-
-type ExtensionsResult = CommandResult<{ extensions: ExtensionInfo[] }>;
-type MarketResult = CommandResult<{ entries: MarketEntry[] }>;
-const MARKET_REPO_URL = "https://github.com/BigPizzaV3/claude-mom-extensions";
-
-/** 页面扩展：注入 Claude 页面的 js / css 包，本地导入或从市场装。开关、安装、删除都是刷新 Claude 页面就生效。 */
-function Extensions({ threePMode, onNotice }: { threePMode: boolean; onNotice: (text: string, tone?: "ok" | "error") => void }) {
-  const [items, setItems] = useState<ExtensionInfo[] | null>(null);
-  const [market, setMarket] = useState<MarketEntry[] | null>(null);
-  const [marketError, setMarketError] = useState<string | null>(null);
-  const [view, setView] = useState<"installed" | "market">("installed");
-  const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
-
-  const call = async (label: string, command: string, args: Record<string, unknown> = {}) => {
-    setBusy(label);
-    try {
-      const result = await invoke<ExtensionsResult>(command, args);
-      setItems(result.extensions ?? []);
-      if (result.message) onNotice(result.message, isOk(result) ? "ok" : "error");
-    } catch (cause) {
-      onNotice(errorText(cause), "error");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const loadMarket = useCallback(async () => {
-    setMarketError(null);
-    try {
-      const result = await invoke<MarketResult>("claude_local_extension_market");
-      if (isOk(result)) setMarket(result.entries);
-      else setMarketError(result.message);
-    } catch (cause) {
-      setMarketError(errorText(cause));
-    }
-  }, []);
-
-  useEffect(() => {
-    void invoke<ExtensionsResult>("claude_local_extensions")
-      .then((result) => setItems(result.extensions ?? []))
-      .catch((cause) => onNotice(errorText(cause), "error"));
-    // 市场也顺手读一次：已安装的扩展据此提示更新；读不到只在市场页里说。
-    void loadMarket();
-    // 只在打开这一页时读一次；之后每个操作都会带回最新列表。
-  }, []);
-
-  const importPackage = async () => {
-    const path = await open({
-      directory: false,
-      multiple: false,
-      title: "选择扩展包的 .zip，或扩展文件夹里的 manifest.json",
-      filters: [{ name: "扩展包", extensions: ["zip", "json"] }],
-    });
-    if (typeof path === "string") await call("import", "claude_local_extension_import", { path });
-  };
-
-  const remove = async (item: ExtensionInfo) => {
-    const yes = await ask(`删除「${item.name}」？扩展文件夹会一起删掉。`, { title: "删除扩展", kind: "warning", okLabel: "删除", cancelLabel: "取消" });
-    if (yes) await call(`remove:${item.id}`, "claude_local_extension_remove", { id: item.id });
-  };
-
-  const install = async (entry: MarketEntry, update: boolean) => {
-    if (entry.source === "community" && !update) {
-      const yes = await ask(
-        `「${entry.name}」来自 ${entry.repo}，没有经过官方审核。\n\n扩展运行在 Claude 页面里，能读到页面上的一切，包括对话内容。确定安装？`,
-        { title: "安装社区扩展", kind: "warning", okLabel: "安装", cancelLabel: "取消" },
-      );
-      if (!yes) return;
-    }
-    await call(`install:${entry.id}`, "claude_local_extension_install", { entry });
-  };
-
-  const openPage = (url: string) =>
-    void invoke<CommandResult<object>>("claude_local_extension_open_page", { url }).then((result) => {
-      if (!isOk(result)) onNotice(result.message, "error");
-    });
-
-  if (!items) return <div className="cm-placeholder"><Loader2 className="cm-spin" /></div>;
-  const installed = new Map(items.map((item) => [item.id, item]));
-  const updates = new Map((market ?? [])
-    .filter((entry) => {
-      const local = installed.get(entry.id);
-      return local && !local.builtin && compareVersions(entry.version, local.version) > 0;
-    })
-    .map((entry) => [entry.id, entry]));
-  const needle = query.trim().toLowerCase();
-  const shown = (market ?? []).filter((entry) => !needle || [entry.name, entry.id, entry.author, entry.description, entry.repo].some((text) => text.toLowerCase().includes(needle)));
-
-  return (
-    <div className="cm-settings">
-      <PageHead hint="注入 Claude 页面的脚本和样式。开关、安装、删除后刷新 Claude 页面（Cmd/Ctrl+R）生效。" title="扩展">
-        <button className="cm-btn" disabled={busy !== null} onClick={() => void call("open", "claude_local_extension_open_folder")} type="button"><FolderOpen />打开文件夹</button>
-        <button className="cm-btn" disabled={busy !== null} onClick={() => void importPackage()} type="button">
-          {busy === "import" ? <Loader2 className="cm-spin" /> : <PackagePlus />}导入扩展包
-        </button>
-      </PageHead>
-      {threePMode ? <p className="cm-warn-text">当前是本机版界面：它不经本地服务，扩展不会生效。换回录制版界面后可用。</p> : null}
-      <div className="cm-card-line">
-        <div className="cm-seg" role="tablist">
-          <button aria-selected={view === "installed"} onClick={() => setView("installed")} role="tab" type="button">
-            已安装<span className="cm-seg-count">{items.length}</span>
-          </button>
-          <button aria-selected={view === "market"} onClick={() => setView("market")} role="tab" type="button">
-            市场{updates.size ? <span className="cm-seg-count" data-tone="accent">{updates.size} 个更新</span> : null}
-          </button>
-        </div>
-        <span className="cm-spacer" />
-        {view === "market" ? (
-          <>
-            <input aria-label="搜索扩展" className="cm-search" onChange={(event) => setQuery(event.currentTarget.value)} placeholder="搜索名称、作者、说明" value={query} />
-            <button aria-label="刷新市场" className="cm-icon" disabled={busy !== null} onClick={() => { setMarket(null); void loadMarket(); }} title="刷新市场" type="button">
-              <RefreshCw className={market === null && !marketError ? "cm-spin" : undefined} />
-            </button>
-          </>
-        ) : null}
-      </div>
-
-      {view === "installed" ? (
-        <>
-          <p className="cm-field-hint">扩展在官方脚本之前运行，能读到页面里的一切（包括对话内容）。只装自己写的或信得过的。</p>
-          {items.map((item) => {
-            const update = updates.get(item.id);
-            return (
-              <section className="cm-card" key={item.id}>
-                <label className="cm-toggle-row">
-                  <span className="cm-toggle-text">
-                    <span className="cm-card-line">
-                      <strong className="cm-ext-name">{item.name}</strong>
-                      {item.version ? <span className="cm-tag cm-mono">v{item.version}</span> : null}
-                      {item.builtin ? <span className="cm-tag">内置</span> : null}
-                    </span>
-                    {item.error
-                      ? <span className="cm-warn-text cm-ext-desc">清单有问题：{item.error}</span>
-                      : <span className="cm-field-hint cm-ext-desc">{item.description || "没有说明"}</span>}
-                  </span>
-                  <input
-                    checked={item.enabled}
-                    disabled={busy !== null || (Boolean(item.error) && !item.enabled)}
-                    onChange={(event) => void call(`enable:${item.id}`, "claude_local_extension_enable", { id: item.id, enabled: event.currentTarget.checked })}
-                    type="checkbox"
-                  />
-                  <span aria-hidden="true" className="cm-switch" />
-                </label>
-                <div className="cm-card-line cm-field-hint">
-                  <span className="cm-mono">{item.id}</span>
-                  {item.author ? <span>· {item.author}</span> : null}
-                  <span className="cm-spacer" />
-                  {update ? (
-                    <button className="cm-btn cm-btn-small cm-btn-primary" disabled={busy !== null} onClick={() => void install(update, true)} type="button">
-                      {busy === `install:${item.id}` ? <Loader2 className="cm-spin" /> : <Download />}更新到 {update.version}
-                    </button>
-                  ) : null}
-                  {item.builtin ? null : (
-                    <button className="cm-btn cm-btn-small cm-btn-danger" disabled={busy !== null} onClick={() => void remove(item)} type="button"><Trash2 />删除</button>
-                  )}
-                </div>
-              </section>
-            );
-          })}
-          <p className="cm-field-hint">
-            扩展包是一个文件夹：manifest.json 写 id、name、version、author、description，以及要注入的 scripts（.js）和 styles（.css）。可以直接导入文件夹里的 manifest.json，或把文件夹打成 .zip 导入。
-          </p>
-        </>
-      ) : (
-        <>
-          {marketError ? (
-            <div className="cm-card">
-              <span className="cm-warn-text">{marketError}</span>
-              <div className="cm-row-actions"><button className="cm-btn cm-btn-small" onClick={() => void loadMarket()} type="button"><RefreshCw />重试</button></div>
-            </div>
-          ) : market === null ? (
-            <div className="cm-placeholder cm-market-loading"><Loader2 className="cm-spin" /></div>
-          ) : !shown.length ? (
-            <p className="cm-field-hint">{needle ? "没有找到匹配的扩展。" : "市场里还没有扩展。"}</p>
-          ) : (
-            shown.map((entry) => {
-              const local = installed.get(entry.id);
-              const label = `install:${entry.id}`;
-              return (
-                <section className="cm-card" key={`${entry.repo}/${entry.id}`}>
-                  <div className="cm-card-line">
-                    <strong className="cm-ext-name">{entry.name}</strong>
-                    <span className="cm-tag cm-mono">v{entry.version}</span>
-                    {entry.source === "official"
-                      ? <span className="cm-tag" data-tone="ok"><ShieldCheck />官方审核</span>
-                      : <span className="cm-tag">社区</span>}
-                    {entry.source === "community" && entry.stars ? <span className="cm-field-hint"><Star className="cm-star" />{entry.stars}</span> : null}
-                    <span className="cm-spacer" />
-                    {local?.builtin ? (
-                      <span className="cm-tag">已内置</span>
-                    ) : updates.has(entry.id) ? (
-                      <button className="cm-btn cm-btn-small cm-btn-primary" disabled={busy !== null} onClick={() => void install(entry, true)} type="button">
-                        {busy === label ? <Loader2 className="cm-spin" /> : <Download />}更新到 {entry.version}
-                      </button>
-                    ) : local ? (
-                      <span className="cm-tag" data-tone="ok"><Check />已安装</span>
-                    ) : (
-                      <button className="cm-btn cm-btn-small cm-btn-primary" disabled={busy !== null} onClick={() => void install(entry, false)} type="button">
-                        {busy === label ? <Loader2 className="cm-spin" /> : <Download />}安装
-                      </button>
-                    )}
-                  </div>
-                  <span className="cm-field-hint cm-ext-desc">{entry.description || "没有说明"}</span>
-                  <div className="cm-card-line cm-field-hint">
-                    <span className="cm-mono">{entry.id}</span>
-                    {entry.author ? <span>· {entry.author}</span> : null}
-                    <span className="cm-spacer" />
-                    <button className="cm-link" onClick={() => openPage(entry.url)} title={entry.url} type="button">{entry.repo}</button>
-                  </div>
-                </section>
-              );
-            })
-          )}
-          <p className="cm-field-hint">
-            「官方审核」的扩展收在 claude-mom-extensions 仓库里，合并前看过代码；「社区」扩展来自作者自己的仓库，没人审核过。
-            想上架自己的扩展？<button className="cm-link" onClick={() => openPage(MARKET_REPO_URL)} type="button">看看怎么做</button>
-          </p>
-        </>
-      )}
-    </div>
   );
 }
 

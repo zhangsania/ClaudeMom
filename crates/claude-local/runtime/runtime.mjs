@@ -111,9 +111,6 @@ export function runtimeConfig(env = process.env) {
     defaultWindow,
     recordedDir,
     localization: flag("LOCALIZATION"),
-    // 页面扩展（见 extensions.mjs）：先内置后用户的扩展目录，和记录启用了哪些的状态文件。
-    extensionDirs: [env.CLAUDE_LOCAL_BUILTIN_EXTENSIONS_DIR, env.CLAUDE_LOCAL_EXTENSIONS_DIR].filter(Boolean),
-    extensionsState: env.CLAUDE_LOCAL_EXTENSIONS_STATE || "",
     voiceInput: flag("VOICE_INPUT"),
     computerUse: flag("COMPUTER_USE"),
     backgroundMode: flag("BACKGROUND_MODE"),

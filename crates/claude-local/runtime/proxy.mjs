@@ -31,7 +31,6 @@ import { isPatchedStartupAsset, startupAssets } from "./scripts/patch-dictation-
 import { createGatewayStreamParser, createStateStore, gatewayBody, gatewayHttpError, gatewayModel, gatewayTarget, isPrivateFile, mergePoolModels, modelList, modelSelectors, isLocalNetworkHost, modelWindow, opencodeSessionHeaders, planProfile, requestSessionId, runtimeConfig } from "./runtime.mjs";
 import { createOfficialAssets, loadCoworkSystemPrompt } from "./official-assets.mjs";
 import { createNativeTitles } from "./native-title.mjs";
-import { EXTENSION_PREFIX, createExtensions } from "./extensions.mjs";
 import { DIRECTORY_MARKETPLACE, installablePlugin, installedDirectoryRecord, libraryItem, pluginRecord, pluginRepository, zipSubtree } from "./plugins.mjs";
 import { createBlobStore, createProjectApi, withProjectContext, withProjectMessages } from "./projects.mjs";
 
@@ -92,34 +91,6 @@ const officialShell = runtime.managed
   ? addLocalizationShim(officialAssets.indexHtml, officialAssets.i18nLocales)
   : null;
 
-// 页面扩展（见 extensions.mjs）：启用中的扩展的 js / css 以同源地址插进页面外壳，每次请求现读。
-const extensions = runtime.managed && runtime.extensionDirs.length && runtime.extensionsState
-  ? createExtensions({ dirs: runtime.extensionDirs.map((dir) => path.resolve(dir)), stateFile: runtime.extensionsState })
-  : null;
-
-// 插在官方脚本之前（有本地化 shim 时在它之后），这样扩展能赶在页面脚本前做事（比如包一层 fetch）。
-// 页面脚本带 nonce 时抄给我们的标签：线上外壳的 CSP 按 nonce 放行脚本。
-function addExtensions(body) {
-  const assets = extensions?.assets() ?? [];
-  if (!assets.length) return body;
-  const html = Buffer.isBuffer(body) ? body.toString("utf8") : body;
-  const head = /<head\b[^>]*>/i.exec(html);
-  const headEnd = /<\/head\s*>/i.exec(html);
-  if (!head || !headEnd || head.index >= headEnd.index) return body;
-  const nonce = /<script\b[^>]*\bnonce=(["'])([\w+/=-]+)\1/i.exec(html)?.[2];
-  const nonceAttr = nonce ? ` nonce="${nonce}"` : "";
-  const tags = assets.map(({ type, href }) => type === "style"
-    ? `<link rel="stylesheet" href="${href}"${nonceAttr}>`
-    : `<script src="${href}"${nonceAttr}></script>`).join("");
-  const contentStart = head.index + head[0].length;
-  const headContent = html.slice(contentStart, headEnd.index);
-  const shimTag = `<script src="${LOCALIZATION_SHIM_PATH}"></script>`;
-  const shimAt = headContent.indexOf(shimTag);
-  const firstScript = /<script\b/i.exec(headContent);
-  const insertAt = contentStart + (shimAt !== -1 ? shimAt + shimTag.length
-    : firstScript ? firstScript.index : headContent.length);
-  return Buffer.from(`${html.slice(0, insertAt)}${tags}${html.slice(insertAt)}`);
-}
 const args = process.argv.slice(2);
 const arg = (name, fallback) => {
   const i = args.indexOf(`--${name}`);
@@ -1812,13 +1783,12 @@ function serveDocShell(req, res, url) {
   const host = url.host || "claude.ai";
   const shell = readDocShell(host);
   if (shell) {
-    const cached = addExtensions(shell);
     res.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
-      "content-length": cached.length,
+      "content-length": shell.length,
       "cache-control": "no-store",
     });
-    return res.end(cached);
+    return res.end(shell);
   }
   if (RESTRICT_EGRESS && (!MAIN_WEB_HOSTS.test(url.hostname) ||
       !(req.method === "GET" && ["/", "/login", "/new", "/epitaxy"].includes(url.pathname)))) {
@@ -1852,12 +1822,11 @@ function serveDocShell(req, res, url) {
             JSON.stringify({ status: 200, headers: { "content-type": "text/html" }, url: `${host}/epitaxy` }),
           );
         }
-        const page = r.statusCode === 200 && !r.headers["content-encoding"] ? addExtensions(body) : body;
         res.writeHead(r.statusCode || 502, {
           "content-type": "text/html; charset=utf-8",
-          "content-length": page.length,
+          "content-length": body.length,
         });
-        res.end(page);
+        res.end(body);
       });
     },
   );
@@ -2065,12 +2034,6 @@ function upstreamFailureHeaders(req) {
   return result;
 }
 
-/** 能原样改写的页面：200、HTML、未压缩。 */
-function isHtmlResponse(status, headers) {
-  return status === 200 && /^text\/html\b/i.test(String(headers?.["content-type"] || "")) &&
-    !headers["content-encoding"];
-}
-
 function proxyUpstream(req, res, url) {
   if (RESTRICT_EGRESS && !allowOfficialAsset(req, url)) return blockEgress(res);
   const cacheKey = `${url.host}${url.pathname}${url.search}`;
@@ -2132,10 +2095,8 @@ function proxyUpstream(req, res, url) {
             JSON.stringify({ status: up.statusCode, headers: bufferedResponseHeaders(up.headers, body.length), url: cacheKey }),
           );
         }
-        // 缓存里存原文，注入只改这次返回的页面。
-        const page = document && isHtmlResponse(up.statusCode, up.headers) ? addExtensions(body) : body;
-        res.writeHead(up.statusCode, bufferedResponseHeaders(up.headers, page.length));
-        res.end(page);
+        res.writeHead(up.statusCode, bufferedResponseHeaders(up.headers, body.length));
+        res.end(body);
       });
     },
   );
@@ -2158,9 +2119,8 @@ function proxyUpstream(req, res, url) {
         res.end("upstream unavailable (doc stub suppressed)\n");
         return;
       }
-      const page = isHtmlResponse(meta.status, meta.headers) ? addExtensions(body) : body;
-      res.writeHead(meta.status || 200, bufferedResponseHeaders(meta.headers, page.length));
-      res.end(page);
+      res.writeHead(meta.status || 200, bufferedResponseHeaders(meta.headers, body.length));
+      res.end(body);
       log(`CACHE HIT ${url.pathname}`);
       return;
     }
@@ -2609,18 +2569,6 @@ function handle(req, res, hostHeader) {
     return mockApi(req, res, url);
   }
   if (runtime.managed && isMainClaudeHost && url.pathname.startsWith("/__codex_plus/")) {
-    const asset = extensions && ["GET", "HEAD"].includes(req.method) && url.pathname.startsWith(EXTENSION_PREFIX)
-      ? extensions.read(url.pathname.slice(EXTENSION_PREFIX.length))
-      : null;
-    if (asset) {
-      res.writeHead(200, {
-        "content-type": asset.type,
-        "content-length": asset.body.length,
-        "cache-control": "no-store",
-        "x-content-type-options": "nosniff",
-      });
-      return res.end(req.method === "HEAD" ? undefined : asset.body);
-    }
     if (
       url.pathname !== LOCALIZATION_SHIM_PATH ||
       !localizationShim ||
@@ -2729,7 +2677,7 @@ function handle(req, res, hostHeader) {
     !path.extname(url.pathname) &&
     !/^\/(?:api|edge-api|v1|claudeai-rpc)(?:\/|$)/.test(url.pathname)
   ) {
-    const shell = addExtensions(officialShell);
+    const shell = officialShell;
     res.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
       "content-length": Buffer.byteLength(shell),
@@ -2919,7 +2867,7 @@ function handle(req, res, hostHeader) {
     !path.extname(url.pathname) &&
     !/^\/(?:api|edge-api|v1|claudeai-rpc)(?:\/|$)/.test(url.pathname)
   ) {
-    const shell = addExtensions(TEMPLATE_SHELL);
+    const shell = TEMPLATE_SHELL;
     res.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
       "content-length": shell.length,
@@ -2983,13 +2931,12 @@ function handle(req, res, hostHeader) {
       const cached = fs.readFileSync(cp);
       // 文档导航只允许真外壳通过；桩体/重定向（登出落地页）改走外壳兜底
       if (!docNav || (meta.status === 200 && cached.length >= 4096)) {
-        const body = docNav && !meta.headers?.["content-encoding"] ? addExtensions(cached) : cached;
         res.writeHead(meta.status && meta.status < 400 ? 200 : meta.status, {
           ...meta.headers,
-          "content-length": body.length,
+          "content-length": cached.length,
           "cache-control": "no-store",
         });
-        return res.end(body);
+        return res.end(cached);
       }
     }
     if (docNav) return serveDocShell(req, res, url);

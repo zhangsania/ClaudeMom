@@ -23,8 +23,6 @@ sha2.workspace = true
 time = "0.3"
 url = "2"
 uuid.workspace = true
-# 导入页面扩展包（.zip）。
-zip = { version = "2", default-features = false, features = ["deflate"] }
 futures-util = { workspace = true, optional = true }
 http = { version = "1", optional = true }
 reqwest = { workspace = true, optional = true }

@@ -1,6 +1,6 @@
 /* ClaudeMom：独立小工具的样式，不依赖 Codex++ 的 styles.css / cursor-ui.css。
    紧凑的桌面程序布局：侧栏（页面导航）+ 工具栏（Claude 状态与启动）+ 页面内容 + 状态栏。
-   上游页里再分一栏上游列表；Claude 设置和扩展是全局的，整宽显示。 */
+   上游页里再分一栏上游列表。 */
 
 :root {
   color-scheme: light dark;
@@ -195,10 +195,6 @@ svg { width: 14px; height: 14px; flex: none; }
 
 .cm-body { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 16px 20px 20px; user-select: text; }
 .cm-placeholder { height: 100%; display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--cm-muted); }
-.cm-page-head { display: flex; align-items: center; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--cm-line); }
-.cm-page-head h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 2px; font-size: 16px; font-weight: 600; }
-.cm-page-head h2 .cm-tag { font-weight: 400; }
-.cm-page-head p { margin: 0; }
 
 /* ── 表单 ─────────────────────────────── */
 .cm-editor { max-width: 640px; display: flex; flex-direction: column; gap: 14px; }
@@ -236,7 +232,6 @@ svg { width: 14px; height: 14px; flex: none; }
 .cm-spacer { flex: 1; }
 
 /* ── Claude 设置 ──────────────────────── */
-.cm-settings { max-width: 640px; display: flex; flex-direction: column; gap: 18px; }
 .cm-group { padding: 12px 14px; border: 1px solid var(--cm-line); border-radius: 8px; background: var(--cm-panel); }
 .cm-group h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--cm-muted); }
 .cm-group > .cm-field-hint { margin: -4px 0 0; }
@@ -269,7 +264,6 @@ svg { width: 14px; height: 14px; flex: none; }
 .cm-crash pre { white-space: pre-wrap; font: 12px/1.5 var(--cm-mono); color: var(--cm-danger); }
 .cm-voice-model { align-items: center; }
 .cm-voice-model .cm-field-hint { flex: 1; }
-.cm-warn-text { color: var(--cm-warn); margin: 0; }
 .cm-update-notes { margin: 0; max-height: 140px; overflow: auto; padding: 8px; border-radius: var(--cm-radius); background: var(--cm-bg); font: 11.5px/1.5 var(--cm-font); white-space: pre-wrap; user-select: text; }
 
 /* ── 简化版：卡片 + 折叠 ─────────────────── */
@@ -297,7 +291,6 @@ svg { width: 14px; height: 14px; flex: none; }
 .cm-more > :not(summary) { margin: 0 14px; }
 .cm-more > :last-child { margin-bottom: 12px; }
 .cm-more .cm-form, .cm-more .cm-toggle-row { margin-top: 2px; }
-.cm-settings { gap: 12px; }
 .cm-editor { gap: 12px; }
 .cm-about, .cm-desktop-downloads { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--cm-muted); }
 .cm-about { justify-content: space-between; }
@@ -305,20 +298,3 @@ svg { width: 14px; height: 14px; flex: none; }
 .cm-desktop-downloads .cm-link { display: inline-flex; align-items: center; gap: 4px; }
 .cm-desktop-downloads .cm-link { font-size: 11.5px; }
 .cm-desktop-downloads .cm-link svg { width: 13px; height: 13px; }
-
-/* ── 扩展 ─────────────────── */
-.cm-settings > p { margin: 0; }
-.cm-ext-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.cm-ext-desc { margin-top: 3px; line-height: 1.5; }
-.cm-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 7px; background: rgba(127, 110, 90, 0.1); }
-.cm-seg button {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 26px; padding: 0 12px; border: 0; border-radius: 5px; background: transparent; color: var(--cm-muted);
-}
-.cm-seg button[aria-selected="true"] { background: var(--cm-panel); color: var(--cm-text); font-weight: 550; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
-.cm-seg-count { font-size: 11px; font-weight: 400; color: var(--cm-muted); }
-.cm-seg-count[data-tone="accent"] { color: var(--cm-accent); }
-.cm-search { width: 200px; height: 28px; padding: 0 8px; border: 1px solid var(--cm-line-strong); border-radius: var(--cm-radius); background: var(--cm-panel); }
-.cm-search:focus { outline: none; border-color: var(--cm-accent); box-shadow: 0 0 0 3px var(--cm-accent-soft); }
-.cm-star { width: 11px; height: 11px; margin-right: 2px; vertical-align: -1px; }
-.cm-market-loading { height: 120px; }
